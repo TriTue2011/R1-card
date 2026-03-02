@@ -8,5 +8,5 @@
   "homeassistant": "2024.1.0",
   "hacs": "1.0.0",
   "filename": "aibox-webui-card.js",
-  "version": "3.0.1"
+  "version": "4.0.0"
 }
