@@ -99,6 +99,9 @@ mode: auto
 title: AI BOX
 default_collapsed: false
 sync_send_song: true
+auto_sync_delay_ms: 5000
+sync_pause_ms: 400
+sync_resume_delay_ms: 2000
 rooms:
   - name: "Phòng khách"
     host: "192.168.1.100"
