@@ -92,7 +92,6 @@ Tắt tính năng này bằng cách set `sync_send_song: false` trong config.
 ## Yêu cầu
 
 - Home Assistant với Lovelace
-- AI BOX firmware v6.x trở lên trên Phicomm R1
 - Truy cập LAN hoặc qua Cloudflare Tunnel
 
 ---
