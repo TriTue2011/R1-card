@@ -97,6 +97,8 @@ mode: auto
 type: custom:aibox-webui-card
 mode: auto
 title: AI BOX
+default_collapsed: false
+sync_send_song: true
 rooms:
   - name: "Phòng khách"
     host: "192.168.1.100"
