@@ -141,7 +141,7 @@ mode: auto
 ```yaml
 type: custom:aibox-webui-card
 mode: auto
-title: AI BOX
+title: Your name
 default_collapsed: false
 sync_send_song: true
 auto_sync_delay_ms: 5000
