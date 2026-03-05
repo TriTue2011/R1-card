@@ -6,6 +6,11 @@ const DEFAULTS = {
   rooms: null,
   default_tab: "media", show_background: true,
   reconnect_ms: 1500, connect_timeout_ms: 2500,
+  sync_send_song: true,
+  // Sync timing (ms)
+  auto_sync_delay_ms: 5000,    // Chờ bao lâu sau khi bài bắt đầu phát rồi mới auto-sync
+  sync_pause_ms: 400,          // Thời gian pause để các client ổn định trước khi seek
+  sync_resume_delay_ms: 3000,  // Chờ sau khi seek xong rồi mới resume (đủ để buffer)
 };
 
 const VOICES = {1:'Ngọc Anh',2:'Minh Anh',3:'Khánh An',4:'Bảo Ngọc',5:'Thanh Mai',6:'Hà My',7:'Thùy Dung',8:'Diệu Linh',9:'Lan Anh',10:'Ngọc Hà',11:'Mai Anh',12:'Bảo Châu',13:'Tú Linh',14:'An Nhiên',15:'Minh Khang',16:'Hoàng Nam',17:'Gia Huy',18:'Đức Anh',19:'Quang Minh',20:'Bảo Long',21:'Hải Đăng',22:'Tuấn Kiệt',23:'Nhật Minh',24:'Anh Dũng',25:'Trung Kiên',26:'Khánh Duy',27:'Phúc An',28:'Thành Đạt',29:'Hữu Phước',30:'Thiên Ân'};
@@ -19,6 +24,10 @@ const ROOM_COLORS = ['#a78bfa','#34d399','#fb923c','#f472b6','#38bdf8','#facc15'
 class AiBoxCard extends HTMLElement {
   static getStubConfig() { return { mode: "auto", title: "AI BOX", rooms: [] }; }
   static getConfigElement() { return null; }
+
+  _lsKey(k) { return `aibox_${(this._config?.title||'card').replace(/\W+/g,'_')}_${k}`; }
+  _lsGet(k) { try { const v = localStorage.getItem(this._lsKey(k)); return v !== null ? JSON.parse(v) : null; } catch { return null; } }
+  _lsSet(k, v) { try { localStorage.setItem(this._lsKey(k), JSON.stringify(v)); } catch {} }
 
   setConfig(config) {
     if (!config) throw new Error("Thiếu cấu hình");
@@ -37,7 +46,12 @@ class AiBoxCard extends HTMLElement {
         }))
       : null;
 
-    if (this._rooms && this._currentRoomIdx === undefined) this._currentRoomIdx = 0;
+    if (this._rooms) {
+      if (this._currentRoomIdx === undefined) {
+        const savedIdx = this._lsGet('roomIdx');
+        this._currentRoomIdx = (savedIdx !== null && savedIdx >= 0 && savedIdx < this._rooms.length) ? savedIdx : 0;
+      }
+    }
     this._applyRoomToConfig();
 
     if (this._inited) {
@@ -58,13 +72,26 @@ class AiBoxCard extends HTMLElement {
     this._ws = null; this._wsConnected = false;
     this._spkWs = null; this._spkHb = null; this._spkEqHb = null; this._spkReconnect = null;
     this._switching = false;
+    this._lastZingSongId = ""; // track zing song_id vì playback_state không trả về song_id
+    // ─── NowPlaying Cache ─────────────────────────────────────────
+    this._nowPlaying = {
+      source:    null,
+      songId:    "",
+      videoId:   "",
+      url:       "",
+      title:     "",
+      artist:    "",
+      thumb:     "",
+      position:  0,
+      duration:  0,
+      isPlaying: false,
+    };    
     this._ctrlPoll = null; this._sysPoll = null; this._progressInterval = null;
     this._reconnectTimer = null; this._connectTimeout = null; this._toastTimer = null;
     this._retryCountdownTimer = null; this._volSendTimer = null; this._volLockTimer = null;
     this._waveRaf = null;
     this._volTempWs = null;
 
-    // ── MULTIROOM STATE ──────────────────────────────────
     this._syncRoomIdxs = new Set();
     this._multiWs = {};
     this._roomVolumes = {};
@@ -77,11 +104,23 @@ class AiBoxCard extends HTMLElement {
     this._volSyncGuardUntil = 0;
     this._posSyncGuardUntil = 0;
     this._syncGen = 0;
+    this._syncSettingsOpen = false;
     this._pendingBroadcastNextSong = false;
     this._pendingBroadcastTimer = null;
-    // ──────────────────────────────────────────────────────
 
-    this._cardCollapsed = false;
+    if (this._rooms) {
+      const savedSync = this._lsGet('syncIdxs');
+      if (Array.isArray(savedSync)) {
+        savedSync.forEach(i => {
+          if (typeof i === 'number' && i >= 0 && i < this._rooms.length && i !== (this._currentRoomIdx||0))
+            this._syncRoomIdxs.add(i);
+        });
+      }
+      const savedAuto = this._lsGet('autoSync');
+      if (savedAuto) this._autoSync = true;
+    }
+
+    this._cardCollapsed = !!this._config.default_collapsed;
 
     this._activeTab = this._config.default_tab;
     this._activeSearchTab = 'songs';
@@ -151,8 +190,10 @@ class AiBoxCard extends HTMLElement {
     this._reconnectTimer = null; this._connectTimeout = null;
     this._spkReconnect = null; this._retryCountdownTimer = null;
     this._currentRoomIdx = idx;
+    this._lsSet('roomIdx', idx);
     this._applyRoomToConfig();
     this._resetState();
+    
     this._switching = true;
     this._syncGen++;
     this._syncInProgress = false;
@@ -185,7 +226,11 @@ class AiBoxCard extends HTMLElement {
       wifiStatus: null, wifiNetworks: [], wifiSaved: [],
       macAddress: "", macIsCustom: false,
       media: { source: null, isPlaying: false, title: "Không có nhạc", artist: "---",
-        thumb: "", position: 0, duration: 0, autoNext: true, repeat: false, shuffle: false },
+        thumb: "", position: 0, duration: 0, autoNext: true, repeat: false, shuffle: false ,
+        url: "",      // ← THÊM
+        videoId: "",  // ← THÊM
+        songId: "",   // ← THÊM
+      },    
       volume: 0, sys: { cpu: 0, ram: 0 },
       alarms: [], playlists: [], playlistSongs: [],
       eqEnabled: false, eqBands: [0,0,0,0,0],
@@ -194,8 +239,57 @@ class AiBoxCard extends HTMLElement {
       premium: -1, premQrB64: "",
     };
     this._ctrlGuard = 0; this._audioGuard = 0; this._volDragging = false;
+    this._lastZingSongId = "";
+    this._resetNowPlayingCache(); // ← THÊM
+  }
+  _updateNowPlayingCache() {
+    const m = this._state.media;
+    if (!m.isPlaying && m.title === "Không có nhạc") {
+      this._resetNowPlayingCache();
+      return;
+    }
+    this._nowPlaying = {
+      source:    m.source   || null,
+      songId:    m.songId   || (m.source === "zing" ? this._lastZingSongId : ""),
+      videoId:   m.videoId  || "",
+      url:       m.url      || "",
+      title:     m.title    || "",
+      artist:    m.artist   || "",
+      thumb:     m.thumb    || "",
+      position:  m.position || 0,
+      duration:  m.duration || 0,
+      isPlaying: m.isPlaying,
+    };
   }
 
+  _resetNowPlayingCache() {
+    this._nowPlaying = {
+      source:    null,
+      songId:    "",
+      videoId:   "",
+      url:       "",
+      title:     "",
+      artist:    "",
+      thumb:     "",
+      position:  0,
+      duration:  0,
+      isPlaying: false,
+    };
+  }
+
+
+  _buildPlayCmdFromCache(cache) {
+    if (!cache) return null;
+    // Zing: cần source + songId
+    if (cache.source === "zing" && cache.songId)
+      return { action: "play_zing", song_id: cache.songId };
+    // YouTube/URL: không cần kiểm tra source
+    if (cache.videoId)
+      return { action: "play_song", video_id: cache.videoId };
+    if (cache.url)
+      return { action: "play_url", url: cache.url, title: cache.title, artist: cache.artist, thumbnail_url: cache.thumb };
+    return null;
+  }
   // ════════════════════════════════════════════════════════════════════
   // MULTIROOM – WebSocket Pool
   // ════════════════════════════════════════════════════════════════════
@@ -236,14 +330,24 @@ class AiBoxCard extends HTMLElement {
     return https ? _tunnelUrl() : _lanUrl();
   }
 
-  _connectMultiRoom(idx) {
+  _connectMultiRoom(idx, pendingCmd = null) {
     if (!this._rooms || idx === this._currentRoomIdx) return;
     const existing = this._multiWs[idx];
     if (existing) {
-      if (existing.ws?.readyState === 0 || existing.ws?.readyState === 1) return;
+      if (existing.ws?.readyState === 0 || existing.ws?.readyState === 1) {
+        // Đã connecting/connected — nếu có pending cmd thì gửi ngay hoặc queue
+        if (pendingCmd) {
+          if (existing.ws.readyState === 1) {
+            existing.ws.send(JSON.stringify(pendingCmd));
+          } else {
+            existing._pendingCmd = pendingCmd; // sẽ gửi khi onopen
+          }
+        }
+        return;
+      }
       this._disconnectMultiRoom(idx);
     }
-    const entry = { ws: null, spkWs: null, reconnectTimer: null, connected: false };
+    const entry = { ws: null, spkWs: null, reconnectTimer: null, connected: false, pollTimer: null, _pendingCmd: pendingCmd };
     this._multiWs[idx] = entry;
     const wsUrl = this._buildMultiRoomWsUrl(idx);
     if (wsUrl) {
@@ -252,12 +356,26 @@ class AiBoxCard extends HTMLElement {
         entry.ws = ws;
         ws.onopen = () => {
           entry.connected = true;
+          entry.pollTimer = setInterval(() => {
+            if (ws.readyState === 1) ws.send(JSON.stringify({ action: 'get_info' }));
+          }, 5000);
+          ws.send(JSON.stringify({ action: 'get_info' }));
+          const cmdToSend = entry._pendingCmd || this._buildPlayCmdFromCache(this._nowPlaying);
+          if (cmdToSend) {
+            setTimeout(() => {
+              if (ws.readyState === 1) ws.send(JSON.stringify(cmdToSend));
+              entry._pendingCmd = null;
+            }, 300);
+          } else {
+            entry._pendingCmd = null;
+          }
           this._toast(`🔗 ${this._rooms[idx].name} linked`, "success");
           this._renderSyncBar();
           this._renderRoomVolumeSliders();
         };
         ws.onclose = () => {
           entry.connected = false;
+          if (entry.pollTimer) { clearInterval(entry.pollTimer); entry.pollTimer = null; }
           this._renderSyncBar();
           this._renderRoomVolumeSliders();
           if (this._syncRoomIdxs.has(idx) && !this._switching && !this._cardCollapsed) {
@@ -272,8 +390,25 @@ class AiBoxCard extends HTMLElement {
         ws.onmessage = (ev) => {
           try {
             const d = JSON.parse(ev.data);
-            if (d.type === "playback_state" && d.title) {
-              // reserved for future use
+            const vol = (() => {
+              if (d.type === "volume_state" && d.volume !== undefined) return Number(d.volume);
+              if (d.type === "get_info" && d.data) {
+                const v = d.data.vol !== undefined ? d.data.vol : d.data.volume;
+                if (v !== undefined) return Number(v);
+              }
+              if (d.type === "playback_state" && d.volume !== undefined) return Number(d.volume);
+              if (d.vol !== undefined) return Number(d.vol);
+              if (d.volume !== undefined) return Number(d.volume);
+              return null;
+            })();
+            if (vol !== null && vol !== this._roomVolumes[idx]) {
+              this._roomVolumes[idx] = vol;
+              const sl = this.querySelector(`.room-vol-slider[data-rvidx="${idx}"]`);
+              if (sl) {
+                sl.value = vol;
+                const lbl = this.querySelector(`#rvl_${idx}`);
+                if (lbl) lbl.textContent = vol;
+              }
             }
           } catch(_) {}
         };
@@ -285,8 +420,28 @@ class AiBoxCard extends HTMLElement {
         const spkWs = new WebSocket(spkUrl);
         entry.spkWs = spkWs;
         const attachSpkHandlers = (ws) => {
-          ws.onopen = () => {};
+          ws.onopen = () => {
+            if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'get_info' }));
+          };
           ws.onerror = () => {};
+          ws.onmessage = (ev) => {
+            try {
+              const d = JSON.parse(ev.data);
+              let s = d;
+              if (typeof d.data === "string") { try { s = JSON.parse(d.data); } catch { s = d; } }
+              else if (d.data) { s = d.data; }
+              const vol = s.vol !== undefined ? Number(s.vol) : null;
+              if (vol !== null && vol !== this._roomVolumes[idx]) {
+                this._roomVolumes[idx] = vol;
+                const sl = this.querySelector(`.room-vol-slider[data-rvidx="${idx}"]`);
+                if (sl) {
+                  sl.value = vol;
+                  const lbl = this.querySelector(`#rvl_${idx}`);
+                  if (lbl) lbl.textContent = vol;
+                }
+              }
+            } catch(_) {}
+          };
           ws.onclose = () => {
             if (entry.spkWs === ws) entry.spkWs = null;
             if (this._syncRoomIdxs.has(idx) && !this._switching && !this._cardCollapsed) {
@@ -313,6 +468,7 @@ class AiBoxCard extends HTMLElement {
     const entry = this._multiWs[idx]; if (!entry) return;
     clearTimeout(entry.reconnectTimer);
     clearTimeout(entry.spkReconnectTimer);
+    if (entry.pollTimer) { clearInterval(entry.pollTimer); entry.pollTimer = null; }
     try { if (entry.ws) { entry.ws.onclose = null; entry.ws.onerror = null; entry.ws.onmessage = null; entry.ws.close(); } } catch(_) {}
     try { if (entry.spkWs) { entry.spkWs.onclose = null; entry.spkWs.onerror = null; entry.spkWs.close(); } } catch(_) {}
     delete this._multiWs[idx];
@@ -400,29 +556,26 @@ class AiBoxCard extends HTMLElement {
     if (!targets.length) { if (!silent) this._toast("Chưa chọn phòng để đồng bộ", "error"); return; }
     if (this._syncInProgress) return;
     this._syncInProgress = true;
-    const PAUSE_SETTLE = 400, SEEK_SETTLE = 700, RESUME_DELAY = 5000;
+    const PAUSE_SETTLE = this._config.sync_pause_ms, SEEK_SETTLE = 700, RESUME_DELAY = this._config.sync_resume_delay_ms;
     const pos = this._state.media.position;
     const wasPlaying = this._state.media.isPlaying;
     const roomNames = targets.map(i => this._rooms[i].name).join(", ");
     const gen = ++this._syncGen;
     const aborted = () => gen !== this._syncGen || this._switching;
 
-    if (!silent) this._toast(`⏱ Đang sync → ${roomNames}... (pause 5s)`, "");
-    else this._toast(`⏱ Auto-sync → ${roomNames}... (pause 5s)`, "");
+    if (!silent) this._toast(`⏱ Đang sync → ${roomNames}... (pause 3s)`, "");
+    else this._toast(`⏱ Auto-sync → ${roomNames}... (pause 3s)`, "");
 
     clearInterval(this._progressInterval); this._progressInterval = null;
 
-    // Step 1: Pause all
     this._broadcastCmd({ action: "pause" });
     this._broadcastSpkCmd({ type: "send_message", what: 65536, arg1: 0, arg2: 0, obj: "pause" });
 
-    // Step 2: Seek
     setTimeout(() => {
       if (aborted()) { this._syncInProgress = false; return; }
       this._send({ action: "seek", position: pos });
       targets.forEach(idx => this._sendToRoom(idx, { action: "seek", position: pos }));
 
-      // Step 3: Resume after settle + delay
       setTimeout(() => {
         if (aborted()) {
           if (wasPlaying) {
@@ -447,8 +600,6 @@ class AiBoxCard extends HTMLElement {
         this._syncInProgress = false;
         this._renderSyncBar();
 
-        // FIX #3: Reconnect speaker WS after sync using _connectMultiRoom
-        // instead of manually creating unmanaged WebSockets
         setTimeout(() => {
           if (aborted()) return;
           this._closeSpkWs();
@@ -456,22 +607,36 @@ class AiBoxCard extends HTMLElement {
 
           targets.forEach(idx => {
             const ent = this._multiWs[idx]; if (!ent) return;
-            // Cleanly close existing spkWs
             try {
               if (ent.spkWs) {
                 ent.spkWs.onclose = null; ent.spkWs.onerror = null;
                 ent.spkWs.close(); ent.spkWs = null;
               }
             } catch(_) {}
-            // FIX: re-use _connectMultiRoom logic so handlers are always attached
             setTimeout(() => {
               if (!this._syncRoomIdxs.has(idx) || this._switching) return;
               const entry = this._multiWs[idx]; if (!entry) return;
-              if (entry.spkWs) return; // already reconnected
+              if (entry.spkWs) return;
               const spkUrl = this._buildMultiRoomSpkUrl(idx); if (!spkUrl) return;
               const attachSpkHandlers = (ws) => {
-                ws.onopen = () => {};
+                ws.onopen = () => {
+                  if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'get_info' }));
+                };
                 ws.onerror = () => {};
+                ws.onmessage = (ev) => {
+                  try {
+                    const d = JSON.parse(ev.data);
+                    let s = d;
+                    if (typeof d.data === "string") { try { s = JSON.parse(d.data); } catch { s = d; } }
+                    else if (d.data) { s = d.data; }
+                    const vol = s.vol !== undefined ? Number(s.vol) : null;
+                    if (vol !== null && vol !== this._roomVolumes[idx]) {
+                      this._roomVolumes[idx] = vol;
+                      const sl = this.querySelector(`.room-vol-slider[data-rvidx="${idx}"]`);
+                      if (sl) { sl.value = vol; const lbl = this.querySelector(`#rvl_${idx}`); if (lbl) lbl.textContent = vol; }
+                    }
+                  } catch(_) {}
+                };
                 ws.onclose = () => {
                   if (entry.spkWs === ws) entry.spkWs = null;
                   if (this._syncRoomIdxs.has(idx) && !this._switching && !this._cardCollapsed) {
@@ -507,14 +672,15 @@ class AiBoxCard extends HTMLElement {
         this._lastSyncSongTitle = currentTitle;
         this._syncPlaybackTime(true);
       }
-    }, 5000);
+    }, this._config.auto_sync_delay_ms);
   }
 
   _toggleAutoSync() {
     this._autoSync = !this._autoSync;
+    this._lsSet('autoSync', this._autoSync);
     clearTimeout(this._autoSyncTimer); this._autoSyncTimer = null;
     if (this._autoSync) {
-      this._toast("🔄 Auto-sync BẬT — sync 1 lần/bài sau 5s", "success");
+      this._toast(`🔄 Auto-sync BẬT — sync sau ${(this._config.auto_sync_delay_ms/1000).toFixed(1)}s/bài`, "success");
       if (this._state.media.isPlaying) this._scheduleAutoSync();
     } else {
       this._autoSyncDoneForSong = false;
@@ -546,16 +712,86 @@ class AiBoxCard extends HTMLElement {
             ${this._syncInProgress ? '⌛ Syncing...' : '⏱ Sync Now'}
           </button>
           <button class="sync-btn ${this._autoSync ? 'sync-auto-on' : ''}" id="btnAutoSync"
-            title="Tự sync 1 lần/bài sau 5s khi bắt đầu phát">
+            title="Tự sync 1 lần/bài sau khi bắt đầu phát">
             ${this._autoSync ? '🔄 Auto ON' : '🔄 Auto'}
           </button>
+          <button class="sync-btn" id="btnSyncSettings" title="Cài đặt thời gian sync">⚙</button>
+        </div>
+      </div>
+      <div id="syncSettingsPanel" class="${this._syncSettingsOpen ? '' : 'hidden'}" style="border-top:1px solid rgba(139,92,246,.15);margin-top:6px;padding-top:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <div style="flex:1;min-width:120px">
+            <div style="font-size:9px;color:rgba(226,232,240,.45);margin-bottom:3px">⏳ Chờ trước auto-sync</div>
+            <div style="display:flex;align-items:center;gap:5px">
+              <input type="range" id="slAutoDelay" min="1000" max="15000" step="500"
+                value="${this._config.auto_sync_delay_ms}"
+                style="flex:1;height:4px" />
+              <span id="autoDelayVal" style="font-size:10px;color:#a78bfa;min-width:32px;text-align:right">${(this._config.auto_sync_delay_ms/1000).toFixed(1)}s</span>
+            </div>
+          </div>
+          <div style="flex:1;min-width:120px">
+            <div style="font-size:9px;color:rgba(226,232,240,.45);margin-bottom:3px">⏸ Pause settle</div>
+            <div style="display:flex;align-items:center;gap:5px">
+              <input type="range" id="slPauseMs" min="100" max="2000" step="100"
+                value="${this._config.sync_pause_ms}"
+                style="flex:1;height:4px" />
+              <span id="pauseMsVal" style="font-size:10px;color:#a78bfa;min-width:32px;text-align:right">${this._config.sync_pause_ms}ms</span>
+            </div>
+          </div>
+          <div style="flex:1;min-width:120px">
+            <div style="font-size:9px;color:rgba(226,232,240,.45);margin-bottom:3px">▶ Resume delay</div>
+            <div style="display:flex;align-items:center;gap:5px">
+              <input type="range" id="slResumeDelay" min="500" max="8000" step="500"
+                value="${this._config.sync_resume_delay_ms}"
+                style="flex:1;height:4px" />
+              <span id="resumeDelayVal" style="font-size:10px;color:#a78bfa;min-width:32px;text-align:right">${(this._config.sync_resume_delay_ms/1000).toFixed(1)}s</span>
+            </div>
+          </div>
+        </div>
+        <div style="font-size:9px;color:rgba(226,232,240,.3);margin-top:5px">
+          Auto-sync: chờ <b style="color:#a78bfa">${(this._config.auto_sync_delay_ms/1000).toFixed(1)}s</b> rồi pause <b style="color:#a78bfa">${this._config.sync_pause_ms}ms</b> → seek → resume sau <b style="color:#a78bfa">${(this._config.sync_resume_delay_ms/1000).toFixed(1)}s</b>
         </div>
       </div>`;
     const syncNow = bar.querySelector("#btnSyncNow");
     if (syncNow) syncNow.onclick = () => this._syncPlaybackTime(false);
     const autoBtn = bar.querySelector("#btnAutoSync");
     if (autoBtn) autoBtn.onclick = () => this._toggleAutoSync();
+    const settingsBtn = bar.querySelector("#btnSyncSettings");
+    if (settingsBtn) settingsBtn.onclick = () => {
+      this._syncSettingsOpen = !this._syncSettingsOpen;
+      this._renderSyncBar();
+    };
+    // Sliders
+    const slAutoDelay = bar.querySelector("#slAutoDelay");
+    if (slAutoDelay) {
+      slAutoDelay.oninput = () => {
+        this._config.auto_sync_delay_ms = parseInt(slAutoDelay.value);
+        const v = bar.querySelector("#autoDelayVal"); if (v) v.textContent = (this._config.auto_sync_delay_ms/1000).toFixed(1) + "s";
+        this._updateSyncSummary(bar);
+      };
+    }
+    const slPauseMs = bar.querySelector("#slPauseMs");
+    if (slPauseMs) {
+      slPauseMs.oninput = () => {
+        this._config.sync_pause_ms = parseInt(slPauseMs.value);
+        const v = bar.querySelector("#pauseMsVal"); if (v) v.textContent = this._config.sync_pause_ms + "ms";
+        this._updateSyncSummary(bar);
+      };
+    }
+    const slResumeDelay = bar.querySelector("#slResumeDelay");
+    if (slResumeDelay) {
+      slResumeDelay.oninput = () => {
+        this._config.sync_resume_delay_ms = parseInt(slResumeDelay.value);
+        const v = bar.querySelector("#resumeDelayVal"); if (v) v.textContent = (this._config.sync_resume_delay_ms/1000).toFixed(1) + "s";
+        this._updateSyncSummary(bar);
+      };
+    }
     bar.style.display = "";
+  }
+
+  _updateSyncSummary(bar) {
+    const el = bar.querySelector("#syncSettingsPanel div:last-child");
+    if (el) el.innerHTML = `Auto-sync: chờ <b style="color:#a78bfa">${(this._config.auto_sync_delay_ms/1000).toFixed(1)}s</b> rồi pause <b style="color:#a78bfa">${this._config.sync_pause_ms}ms</b> → seek → resume sau <b style="color:#a78bfa">${(this._config.sync_resume_delay_ms/1000).toFixed(1)}s</b>`;
   }
 
   _renderRoomVolumeSliders() {
@@ -992,6 +1228,12 @@ class AiBoxCard extends HTMLElement {
   _requestInitial() {
     if (!this._wsConnected || this._cardCollapsed) return;
     if (!this._spkWs || this._spkWs.readyState > 1) { this._connectSpkWs(); } else { this._startSpkHeartbeat(); }
+    if (this._syncRoomIdxs.size > 0) {
+      this._syncRoomIdxs.forEach(sidx => {
+        if (sidx !== this._currentRoomIdx) this._connectMultiRoom(sidx);
+      });
+      setTimeout(() => { this._renderSyncBar(); this._renderRoomVolumeSliders(); }, 300);
+    }
     this._loadTab(this._activeTab, true);
   }
 
@@ -1179,9 +1421,6 @@ class AiBoxCard extends HTMLElement {
     clearTimeout(this._toastTimer); this._toastTimer = setTimeout(() => { if (el) el.className = "toast"; }, 2200);
   }
 
-  // ════════════════════════════════════════════════════════════════════
-  // FIX #4: Input modal — replaces prompt() for HA webview compatibility
-  // ════════════════════════════════════════════════════════════════════
   _showInputModal(labelText, placeholder, callback) {
     const existing = this.querySelector("#inputModal"); if (existing) existing.remove();
     const div = document.createElement("div");
@@ -1205,7 +1444,6 @@ class AiBoxCard extends HTMLElement {
     setTimeout(() => inp.focus(), 50);
   }
 
-  // FIX #4: Password modal — replaces prompt() for WiFi password input
   _showPasswordModal(ssid, callback) {
     const existing = this.querySelector("#pwModal"); if (existing) existing.remove();
     const div = document.createElement("div");
@@ -1228,6 +1466,63 @@ class AiBoxCard extends HTMLElement {
     div.querySelector("#_pwOk").onclick = confirm;
     inp.onkeypress = e => { if (e.key === "Enter") confirm(); };
     setTimeout(() => inp.focus(), 50);
+  }
+
+  _showAddToPlaylistModal(item, type) {
+    const existing = this.querySelector("#addPlModal"); if (existing) existing.remove();
+    // Cần biết danh sách playlist → fetch trước
+    this._send({ action: "playlist_list" });
+    const div = document.createElement("div");
+    div.id = "addPlModal"; div.className = "modal-overlay";
+    const playlists = this._state.playlists || [];
+    const songTitle = item.title || item.name || "---";
+    div.innerHTML = `<div class="modal-box" style="max-width:320px">
+      <div class="modal-head"><h3>➕ Thêm vào Playlist</h3><button class="modal-close" id="_apClose">✕</button></div>
+      <div style="font-size:11px;color:#a78bfa;font-weight:700;margin-bottom:10px">🎵 ${this._esc(songTitle)}</div>
+      ${playlists.length ? playlists.map((pl, i) => `<div class="pl-item" style="cursor:pointer" data-apidx="${i}">
+        <span class="pl-name">${this._esc(pl.name)}</span>
+        <span class="pl-count">${pl.count ?? pl.song_count ?? 0} bài</span>
+        <button class="form-btn sm green" data-apidx="${i}">+ Thêm</button>
+      </div>`).join("") : '<div style="text-align:center;padding:16px;color:rgba(226,232,240,.4);font-size:11px">Chưa có playlist nào.<br>Hãy tạo playlist trước.</div>'}
+      <div class="fx g4 mt8">
+        <button class="form-btn" id="_apCancel" style="flex:1">Đóng</button>
+        <button class="form-btn green" id="_apNew" style="flex:1">+ Tạo mới</button>
+      </div>
+    </div>`;
+    this.appendChild(div);
+    const close = () => div.remove();
+    div.querySelector("#_apClose").onclick = close;
+    div.querySelector("#_apCancel").onclick = close;
+    div.querySelector("#_apNew").onclick = () => {
+      close();
+      this._showInputModal("Tên playlist mới", "VD: Nhạc buổi sáng", (name) => {
+        if (!name?.trim()) return;
+        this._send({ action: "playlist_create", name: name.trim() });
+        this._toast("✅ Đã tạo playlist — mở lại để thêm bài", "success");
+      });
+    };
+    div.querySelectorAll("[data-apidx]").forEach(btn => {
+      btn.onclick = () => {
+        const idx = parseInt(btn.dataset.apidx);
+        const pl = playlists[idx]; if (!pl) return;
+        // Build payload theo API: source, id (không phải song_id), title, artist, thumbnail_url, duration_seconds
+        let source, id;
+        if (type === "zing") { source = "zing"; id = item.song_id || item.id; }
+        else { source = "youtube"; id = item.video_id || item.id; }
+        this._send({
+          action: "playlist_add_song",
+          playlist_id: pl.id,
+          source,
+          id,
+          title: item.title || item.name || "",
+          artist: item.artist || item.channel || "",
+          thumbnail_url: item.thumbnail_url || "",
+          duration_seconds: item.duration_seconds || 0,
+        });
+        this._toast(`✅ Đã thêm vào "${pl.name}"`, "success");
+        close();
+      };
+    });
   }
 
   _render() {
@@ -1734,7 +2029,38 @@ select.form-inp{cursor:pointer}
           const idx = parseInt(cb.dataset.sidx);
           if (cb.checked) {
             this._syncRoomIdxs.add(idx);
-            this._connectMultiRoom(idx);
+
+            // Build play command TRƯỚC khi connect
+            let pendingCmd = null;
+            const m = this._state.media;
+            if (m.isPlaying && this._config.sync_send_song !== false) {
+              const zingSongId = m.songId || (m.source === "zing" ? this._lastZingSongId : "");
+              if (m.source === "zing" && zingSongId) {
+                pendingCmd = { action: "play_zing", song_id: zingSongId };
+              } else if (m.videoId) {
+                pendingCmd = { action: "play_song", video_id: m.videoId };
+              } else if (m.url && m.source !== "zing") {
+                pendingCmd = { action: "play_url", url: m.url, title: m.title, artist: m.artist, thumbnail_url: m.thumb };
+              }
+              if (!pendingCmd) {
+                pendingCmd = this._buildPlayCmdFromCache(this._nowPlaying);
+              }
+            }
+
+            // Pass pendingCmd vào connectMultiRoom — gửi ngay khi ws.onopen
+            this._connectMultiRoom(idx, pendingCmd);
+
+            if (pendingCmd) {
+              // Schedule auto-sync sau khi bài đã phát ổn định
+              setTimeout(() => {
+                if (this._syncRoomIdxs.has(idx) && this._state.media.isPlaying) {
+                  this._autoSyncDoneForSong = false;
+                  this._lastSyncSongTitle = "";
+                  this._scheduleAutoSync();
+                }
+              }, 4000);
+            }
+
             const label = cb.closest('.sync-cb-label');
             if (label) { label.classList.add('synced'); const icon = label.querySelector('.sync-cb-icon'); if (icon) icon.textContent = '🔗'; }
             this._toast(`🔗 Broadcast → ${this._rooms[idx].name}`, "success");
@@ -1745,6 +2071,7 @@ select.form-inp{cursor:pointer}
             if (label) { label.classList.remove('synced'); const icon = label.querySelector('.sync-cb-icon'); if (icon) icon.textContent = '⭕'; }
             this._toast(`⭕ Bỏ broadcast ${this._rooms[idx].name}`, "");
           }
+          this._lsSet('syncIdxs', Array.from(this._syncRoomIdxs));
           this._renderSyncBar();
           this._renderRoomVolumeSliders();
         };
@@ -1782,10 +2109,28 @@ select.form-inp{cursor:pointer}
         this._broadcastSpkCmd({ type: 'send_message', what: 65536, arg1: 0, arg2: 1, obj: 'playorpause' });
       }
     });
+
     this._on("#btnStop", () => {
+      this._resetNowPlayingCache();
+      const m = this._state.media;
+      m.position  = 0;
+      m.duration  = 0;
+      m.isPlaying = false;
+      m.title     = "Không có nhạc";
+      m.artist    = "---";
+      m.thumb     = "";
+      m.source    = null;
+      // Guard: bỏ qua playback_state position từ server trong 3s tới
+      this._stopGuardUntil = Date.now() + 3000;
       this._broadcastCmd({ action: "stop" });
-      this._broadcastSpkCmd({ type: 'send_message', what: 65536, arg1: 0, arg2: 1, obj: 'stop' });
+      this._broadcastSpkCmd({ type: "send_message", what: 65536, arg1: 0, arg2: 1, obj: "stop" });
+      // Cập nhật UI ngay lập tức
+      this._updateProgressOnly();
+      this._renderMedia();
+      clearInterval(this._progressInterval);
+      this._progressInterval = null;
     });
+
     this._on("#btnPrev", () => this._triggerMasterPrev());
     this._on("#btnNext", () => this._triggerMasterNext());
     this._on("#btnRepeat", () => this._send({ action: "toggle_repeat" }));
@@ -1805,7 +2150,6 @@ select.form-inp{cursor:pointer}
     this._on("#searchBtn", () => this._doSearch());
     const si = this.querySelector("#searchInp"); if (si) si.onkeypress = e => { if (e.key === "Enter") this._doSearch(); };
 
-    // FIX #4: Use _showInputModal instead of prompt()
     this._on("#btnPlCreate", () => {
       this._showInputModal("Tên playlist mới", "VD: Nhạc buổi sáng", (name) => {
         if (name?.trim()) this._send({ action: "playlist_create", name: name.trim() });
@@ -1977,20 +2321,58 @@ select.form-inp{cursor:pointer}
 <div class="result-btns"><button class="rbtn rbtn-add" data-addidx="${i}" title="Thêm vào playlist">+</button><button class="rbtn rbtn-play" data-playidx="${i}">▶ Phát</button></div></div>`;
     }).join("");
     items.forEach((item, i) => {
+      // ── FIX 4: Add button ─────────────────────────
+      const addBtn = el.querySelector(`[data-addidx="${i}"]`);
+      if (addBtn) addBtn.onclick = (e) => {
+        e.stopPropagation();
+        this._send({ action: "playlist_list" });
+        setTimeout(() => this._showAddToPlaylistModal(item, type), 100);
+      };
+
+      // ── Play button (giữ nguyên) ──────────────────
       const playBtn = el.querySelector(`[data-playidx="${i}"]`);
       if (playBtn) playBtn.onclick = (e) => {
-        e.stopPropagation();
         let cmd;
-        if (type === "playlist") cmd = { action: "playlist_play", playlist_id: item.playlist_id || item.id };
-        else if (type === "zing") cmd = { action: "play_zing", song_id: item.song_id || item.id };
-        else cmd = { action: "play_song", video_id: item.video_id || item.id };
+        if (type === "playlist") {
+          cmd = { action: "playlist_play", playlist_id: item.playlist_id || item.id };
+        } else if (type === "zing") {
+          const sid = item.song_id || item.id;
+          this._lastZingSongId      = sid;
+          this._state.media.songId  = sid;
+          this._nowPlaying = {
+            source:    "zing",
+            songId:    sid,
+            videoId:   "",
+            url:       "",
+            title:     item.title  || item.name || "",
+            artist:    item.artist || item.channel || "",
+            thumb:     item.thumbnail_url || "",
+            position:  0,
+            duration:  item.duration_seconds || 0,
+            isPlaying: true,
+          };
+          cmd = { action: "play_zing", song_id: sid };
+        } else {
+          const vid = item.video_id || item.id;
+          this._nowPlaying = {
+            source:    "youtube",
+            songId:    "",
+            videoId:   vid,
+            url:       "",
+            title:     item.title  || item.name || "",
+            artist:    item.artist || item.channel || "",
+            thumb:     item.thumbnail_url || "",
+            position:  0,
+            duration:  item.duration_seconds || 0,
+            isPlaying: true,
+          };
+          cmd = { action: "play_song", video_id: vid };
+        }
         this._broadcastCmd(cmd);
         this._autoSyncDoneForSong = false;
-        this._lastSyncSongTitle = "";
+        this._lastSyncSongTitle   = "";
         this._toast(`▶ ${this._esc(item.title || "")}`, "success");
       };
-      const addBtn = el.querySelector(`[data-addidx="${i}"]`);
-      if (addBtn) addBtn.onclick = (e) => { e.stopPropagation(); this._toast(`TODO: Add to playlist`, "success"); };
     });
   }
 
@@ -2001,8 +2383,8 @@ select.form-inp{cursor:pointer}
     el.innerHTML = playlists.map((pl, i) => `<div class="pl-item"><span class="pl-name">${this._esc(pl.name || "Playlist")}</span><span class="pl-count">${pl.song_count || 0} bài</span><div class="pl-btns"><button class="form-btn sm green" data-plplay="${i}">▶</button><button class="form-btn sm" data-plview="${i}">👁</button><button class="form-btn sm danger" data-pldel="${i}">✕</button></div></div>`).join("");
     playlists.forEach((pl, i) => {
       this._on(`[data-plplay="${i}"]`, () => { this._send({ action: "playlist_play", playlist_id: pl.id }); this._toast(`▶ ${pl.name}`, "success"); });
-      this._on(`[data-plview="${i}"]`, () => this._send({ action: "playlist_get_songs", id: pl.id }));
-      this._on(`[data-pldel="${i}"]`, () => { if (confirm(`Xóa "${pl.name}"?`)) this._send({ action: "playlist_delete", id: pl.id }); });
+      this._on(`[data-plview="${i}"]`, () => this._send({ action: "playlist_get_songs", playlist_id: pl.id }));
+      this._on(`[data-pldel="${i}"]`, () => { if (confirm(`Xóa "${pl.name}"?`)) { this._send({ action: "playlist_delete", playlist_id: pl.id }); } });
     });
   }
 
@@ -2039,13 +2421,79 @@ select.form-inp{cursor:pointer}
     if (d.type === "zing_result") { this._renderSearchResults(d.songs || d.results || [], "zing"); return; }
     if (d.type === "playlist_result") { this._renderSearchResults(d.songs || d.playlists || d.results || [], "playlist"); return; }
     if (d.type === "playlist_list_result") { this._renderPlaylistList(d.playlists || []); return; }
+    if (d.type === "playlist_created") {
+      this._toast(`✅ Đã tạo playlist: ${this._esc(d.playlist?.name || "")}`, "success");
+      this._send({ action: "playlist_list" }); return;
+    }
+    if (d.type === "playlist_deleted") {
+      this._toast("🗑 Đã xóa playlist", "success");
+      this._send({ action: "playlist_list" }); return;
+    }
+    if (d.type === "playlist_song_added") {
+      this._toast("✅ Đã thêm bài vào playlist", "success"); return;
+    }
+    if (d.type === "playlist_song_removed") {
+      this._toast("🗑 Đã xóa bài khỏi playlist", "success"); return;
+    }
+    if (d.type === "playlist_play_started") {
+      this._toast(`▶ Đang phát: ${this._esc(d.playlist_name || "")}`, "success"); return;
+    }
     if (d.type === "playlist_songs_result") {
       this._state.playlistSongs = d.songs || [];
+      const plId = d.playlist_id;
       const el = this.querySelector("#plSongs"); if (!el) return;
       el.classList.remove("hidden");
-      el.innerHTML = `<div class="fx jcb aic mb6"><span style="font-size:10px;font-weight:700;color:rgba(226,232,240,.6)">Bài hát:</span><button class="form-btn sm" id="closePlSongs">✕</button></div>` +
-        (d.songs?.length ? d.songs.map((s, i) => `<div class="result-item"><div class="result-info"><div class="result-title">${this._esc(s.title || "?")}</div></div><button class="form-btn sm danger" data-rmsong="${i}">✕</button></div>`).join("") : '<div style="text-align:center;padding:8px;font-size:10px;color:rgba(226,232,240,.4)">Trống</div>');
-      this._on("#closePlSongs", () => el.classList.add("hidden")); return;
+      el.innerHTML = `<div class="fx jcb aic mb6"><span style="font-size:10px;font-weight:700;color:rgba(226,232,240,.6)">📋 ${this._esc(d.playlist_name||'')} (${(d.songs||[]).length} bài)</span><button class="form-btn sm" id="closePlSongs">✕</button></div>` +
+        (d.songs?.length ? d.songs.map((s, i) => `<div class="result-item">
+          ${s.thumbnail_url ? `<img class="result-thumb" src="${this._esc(s.thumbnail_url)}" onerror="this.style.display='none'" />` : '<div class="result-thumb">🎵</div>'}
+          <div class="result-info"><div class="result-title">${this._esc(s.title || "?")}</div><div class="result-sub">${this._esc(s.artist||'')}${s.duration_seconds ? ' · ' + this._fmtTime(s.duration_seconds) : ''}</div></div>
+          <div class="result-btns">
+            <button class="rbtn rbtn-play" data-plsplay="${i}">▶</button>
+            <button class="form-btn sm danger" data-rmsong="${i}">✕</button>
+          </div></div>`).join("") : '<div style="text-align:center;padding:8px;font-size:10px;color:rgba(226,232,240,.4)">Trống</div>');
+      this._on("#closePlSongs", () => el.classList.add("hidden"));
+      // Play song in playlist
+      el.querySelectorAll("[data-plsplay]").forEach(btn => {
+        btn.onclick = () => {
+          const sidx = parseInt(btn.dataset.plsplay);
+          const s = (d.songs||[])[sidx]; if (!s) return;
+          let cmd;
+          if (s.source === "zing") {
+            const sid = s.id || s.song_id || "";
+            this._lastZingSongId = sid;
+            this._nowPlaying = {
+              source: "zing", songId: sid, videoId: "", url: "",
+              title: s.title || "", artist: s.artist || "",
+              thumb: s.thumbnail_url || "",
+              position: 0, duration: s.duration_seconds || 0, isPlaying: true,
+            };
+            cmd = { action: "play_zing", song_id: sid };
+          } else {
+            const vid = s.id || s.video_id || "";
+            this._nowPlaying = {
+              source: "youtube", songId: "", videoId: vid, url: "",
+              title: s.title || "", artist: s.artist || "",
+              thumb: s.thumbnail_url || "",
+              position: 0, duration: s.duration_seconds || 0, isPlaying: true,
+            };
+            cmd = { action: "play_song", video_id: vid };
+          }
+          this._broadcastCmd(cmd);
+          this._toast(`▶ ${this._esc(s.title||'')}`, "success");
+        };
+      });
+      // Remove song
+      el.querySelectorAll("[data-rmsong]").forEach(btn => {
+        btn.onclick = () => {
+          const sidx = parseInt(btn.dataset.rmsong);
+          if (confirm(`Xóa bài #${sidx + 1} khỏi playlist?`)) {
+            this._send({ action: "playlist_remove_song", playlist_id: plId, song_index: sidx });
+            this._toast("🗑 Đã xóa bài hát", "success");
+            setTimeout(() => this._send({ action: "playlist_get_songs", playlist_id: plId }), 300);
+          }
+        };
+      });
+      return;
     }
     if (d.type === "wake_word_enabled_state" || d.type === "wake_word_get_enabled_result") { if (d.enabled !== undefined) this._state.wakeWordEnabled = !!d.enabled; this._renderWakeWord(); return; }
     if (d.type === "wake_word_sensitivity_state" || d.type === "wake_word_get_sensitivity_result") { if (d.sensitivity !== undefined) this._state.wakeWordSensitivity = Number(d.sensitivity); this._renderWakeWord(); return; }
@@ -2078,6 +2526,12 @@ select.form-inp{cursor:pointer}
     }
     if (d.type === "premium_status") { this._state.premium = d.premium; if (d.qr_code_base64) this._state.premQrB64 = d.qr_code_base64; this._renderPremium(); return; }
     if (d.type === "playback_state") {
+      // Nếu vừa stop, không cho server restore lại position/duration
+      if (this._stopGuardUntil && Date.now() < this._stopGuardUntil) {
+        if (!d.is_playing) {
+          d = { ...d, position: 0, duration: 0 };
+        }
+      }
       const m = this._state.media;
       const wasPlaying = m.isPlaying;
       const prevTitle = m.title;
@@ -2091,9 +2545,13 @@ select.form-inp{cursor:pointer}
       m.thumb = d.thumbnail_url || "";
       if (d.url) m.url = d.url;
       if (d.video_id) m.videoId = d.video_id;
-      if (d.song_id) m.songId = d.song_id;
+      // API Zing không trả song_id trong playback_state → dùng _lastZingSongId
+      if (d.song_id) { m.songId = d.song_id; if (m.source === "zing") this._lastZingSongId = d.song_id; }
+      else if (m.source === "zing" && this._lastZingSongId) { m.songId = this._lastZingSongId; }
+      else if (m.source !== "zing") { m.songId = ""; }
       if (d.id && !m.videoId && !m.songId) {
-        if (m.source === "zing") m.songId = d.id; else m.videoId = d.id;
+        if (m.source === "zing") { m.songId = d.id; this._lastZingSongId = d.id; }
+        else m.videoId = d.id;
       }
       if (!(this._posSyncGuardUntil && Date.now() < this._posSyncGuardUntil)) {
         m.position = Number(d.position || 0);
@@ -2104,46 +2562,37 @@ select.form-inp{cursor:pointer}
       if (d.shuffle_enabled !== undefined) m.shuffle = !!d.shuffle_enabled;
       if (d.volume !== undefined && !(this._volSyncGuardUntil && Date.now() < this._volSyncGuardUntil)) this._state.volume = Number(d.volume);
 
-      // FIX #2: Snapshot media values NOW before any setTimeout delay
-      // to avoid race condition where playlist auto-advances during the 1s delay
-      const _buildPlayCmdSnapshot = () => {
-        const snapUrl = m.url, snapSource = m.source;
-        const snapVideoId = m.videoId, snapSongId = m.songId;
-        const snapTitle = m.title, snapArtist = m.artist, snapThumb = m.thumb;
-        if (snapUrl) return { action: "play_url", url: snapUrl, title: snapTitle, artist: snapArtist, thumbnail_url: snapThumb };
-        if (snapSource === "zing" && snapSongId) return { action: "play_zing", song_id: snapSongId };
-        if (snapVideoId) return { action: "play_song", video_id: snapVideoId };
-        return { action: "next" };
-      };
-
-      // FIX #1: Changed second block to "else if" to prevent double broadcast.
-      // Previously both blocks could run in the same event: block 1 sets
-      // _pendingBroadcastNextSong=false, then block 2's !false condition fires too.
-
-      // Block 1: User pressed Next/Prev → master changed song
-      if (this._pendingBroadcastNextSong && m.isPlaying && newTitle && newTitle !== prevTitle) {
-        clearTimeout(this._pendingBroadcastTimer); this._pendingBroadcastTimer = null;
-        this._pendingBroadcastNextSong = false;
-        // FIX #2: Use snapshot captured above (values from this exact moment)
-        const cmd = _buildPlayCmdSnapshot();
-        this._getSyncTargets().forEach(idx => this._sendToRoom(idx, cmd));
-        this._autoSyncDoneForSong = false;
-        this._lastSyncSongTitle = "";
+      // ── FIX STOP: reset cache nếu server báo dừng hẳn ────────
+      if (!m.isPlaying && m.position === 0 && m.duration === 0) {
+        this._resetNowPlayingCache();
+      } else {
+        this._updateNowPlayingCache();
       }
-      // FIX #1: "else if" — only runs if block 1 did NOT run
-      // Block 2: Auto-next — firmware changed song without user pressing next
-      else if (!this._pendingBroadcastNextSong && m.isPlaying && newTitle && newTitle !== prevTitle) {
+
+      // ── Build play command từ cache ───────────────────────────
+      const _buildPlayCmdSnapshot = () => this._buildPlayCmdFromCache(this._nowPlaying);
+
+      if (this._pendingBroadcastNextSong && m.isPlaying && newTitle && newTitle !== prevTitle) {
+        clearTimeout(this._pendingBroadcastTimer);
+        this._pendingBroadcastTimer    = null;
+        this._pendingBroadcastNextSong = false;
+        const cmd = _buildPlayCmdSnapshot();
+        if (cmd) this._getSyncTargets().forEach(idx => this._sendToRoom(idx, cmd));
+        this._autoSyncDoneForSong = false;
+        this._lastSyncSongTitle   = "";
+      } else if (!this._pendingBroadcastNextSong && m.isPlaying && newTitle && newTitle !== prevTitle) {
         const targets = this._getSyncTargets();
-        if (targets.length > 0) {
-          // FIX #2: Capture snapshot before setTimeout so values can't drift
+        if (targets.length > 0 && this._config.sync_send_song !== false) {
           const cmd = _buildPlayCmdSnapshot();
-          setTimeout(() => {
-            if (this._switching) return;
-            targets.forEach(idx => this._sendToRoom(idx, cmd));
-          }, 1000);
+          if (cmd) {
+            setTimeout(() => {
+              if (this._switching) return;
+              targets.forEach(idx => this._sendToRoom(idx, cmd));
+            }, 1000);
+          }
         }
         this._autoSyncDoneForSong = false;
-        this._lastSyncSongTitle = "";
+        this._lastSyncSongTitle   = "";
       }
 
       if (m.isPlaying && !wasPlaying) this._scheduleAutoSync();
@@ -2153,37 +2602,9 @@ select.form-inp{cursor:pointer}
         this._scheduleAutoSync();
       }
 
-      this._renderMedia(); this._renderVolume(); return;
-    }
-    if (d.type === "volume_state") {
-      if (!(this._volSyncGuardUntil && Date.now() < this._volSyncGuardUntil))
-        this._state.volume = Number(d.volume || 0);
-      this._renderVolume(); return;
-    }
-    if (d.type === "get_info" && d.data) {
-      const s = d.data; const ctrlOk = Date.now() - this._ctrlGuard > 3000;
-      if (ctrlOk) {
-        if (s.dlna_open !== undefined) this._state.dlnaOpen = !!s.dlna_open;
-        if (s.airplay_open !== undefined) this._state.airplayOpen = !!s.airplay_open;
-        if (s.device_state !== undefined) this._state.bluetoothOn = (s.device_state === 3);
-        if (s.music_light_enable !== undefined) this._state.lightEnabled = !!s.music_light_enable;
-        if (s.music_light_luma !== undefined) this._state.brightness = Math.max(1, Math.min(200, Math.round(s.music_light_luma)));
-        if (s.music_light_chroma !== undefined) this._state.speed = Math.max(1, Math.min(100, Math.round(s.music_light_chroma)));
-        this._renderControlToggles(); this._renderLight();
-      }
-      if (!this._volDragging) { if (s.volume !== undefined) this._state.volume = Number(s.volume); if (s.vol !== undefined) this._state.volume = Number(s.vol); this._renderVolume(); }
+      this._renderMedia();
+      this._renderVolume();
       return;
-    }
-    if (d.type === "system_stats" && typeof d.raw === "string") { this._parseProcStats(d.raw); this._renderSystem(); return; }
-    if (d.type === "get_device_info" && d.data) {
-      const dd = d.data;
-      if (Array.isArray(dd.cpuinfo) && dd.cpuinfo.length > 2) this._state.sys.cpu = Math.round(dd.cpuinfo[2] * 100 * 10) / 10;
-      if (typeof dd.meminfo === "string") {
-        const mTotal = (dd.meminfo.match(/MemTotal:\s+(\d+)/) || [])[1]; const mFree = (dd.meminfo.match(/MemFree:\s+(\d+)/) || [])[1];
-        const mBuf = (dd.meminfo.match(/Buffers:\s+(\d+)/) || [])[1]; const mCach = (dd.meminfo.match(/\bCached:\s+(\d+)/) || [])[1];
-        if (mTotal && mFree) { const used = parseInt(mTotal) - parseInt(mFree) - (parseInt(mBuf)||0) - (parseInt(mCach)||0); this._state.sys.ram = Math.round(used / parseInt(mTotal) * 100); }
-      }
-      this._renderSystem(); return;
     }
   }
 
@@ -2302,7 +2723,6 @@ select.form-inp{cursor:pointer}
   _renderWifiScan() {
     const el = this.querySelector("#wifiScanArea"); if (!el) return;
     el.innerHTML = this._state.wifiNetworks.map(n => `<div class="wifi-item" data-wfssid="${this._esc(n.ssid)}"><div><div class="wifi-ssid">📶 ${this._esc(n.ssid)}</div><div class="wifi-rssi">${n.rssi || ""} dBm ${n.secured ? "🔒" : ""}</div></div></div>`).join("");
-    // FIX #4: Use _showPasswordModal instead of prompt() for WiFi password
     this._state.wifiNetworks.forEach(n => {
       const item = el.querySelector(`[data-wfssid="${this._esc(n.ssid)}"]`);
       if (item) item.onclick = () => {
@@ -2454,7 +2874,7 @@ window.customCards.push({ type: "aibox-webui-card", name: "AI BOX WebUI Card", d
 
 // ── Cache-buster ─────────────────────────────────────────────────────────────
 (function() {
-  const BUILD_TS = "20260302-v7.2-bugfix"; // ← đổi chuỗi này mỗi khi deploy bản mới
+  const BUILD_TS = "20260304-v7.7-sync-on-connect";
   const SK = "aibox_card_build";
 
   try {
@@ -2481,5 +2901,5 @@ window.customCards.push({ type: "aibox-webui-card", name: "AI BOX WebUI Card", d
     console.warn("[AI BOX Card] sessionStorage unavailable, cache busting skipped:", e);
   }
 
-  console.log(`%c AI BOX WebUI Card v7.2-bugfix [${BUILD_TS}] — FIX: double-broadcast • race-condition • spkWs-handler • no-prompt`, "color:#a78bfa;font-weight:bold;font-size:11px");
+  console.log(`%c AI BOX WebUI Card v7.5-zing-playlist-fix [${BUILD_TS}] — FIX: Zing song_id tracking (playback_state ko trả song_id) • playlist_get_songs dùng playlist_id • add/remove song hoạt động`, "color:#a78bfa;font-weight:bold;font-size:11px");
 })();
