@@ -107,6 +107,15 @@ class AiBoxCard extends HTMLElement {
     this._syncSettingsOpen = false;
     this._pendingBroadcastNextSong = false;
     this._pendingBroadcastTimer = null;
+    this._pendingRoomCmd = null;  // null=auto-next | "next"/"prev"=manual | "broadcast"=direct play
+    this._pendingNextTitle = null; // chờ is_playing=true với title này rồi gửi tuần tự sang rooms
+
+    // ─── Song Cache (bộ nhớ tạm) ──────────────────────────────────
+    // Lưu danh sách bài từ search hoặc playlist hiện tại
+    // Reset khi search mới hoặc playlist mới phát
+    // Format: [{source:"youtube"|"zing", id, title, artist, thumb, duration}]
+    this._songCache = [];
+    this._activePlaylistId = null; // playlist đang phát → dùng để re-fetch khi lookup thất bại
 
     if (this._rooms) {
       const savedSync = this._lsGet('syncIdxs');
@@ -160,6 +169,7 @@ class AiBoxCard extends HTMLElement {
     if (!this._rooms) return;
     this._rooms.forEach((_, i) => {
       if (this[`_rvTimer_${i}`]) { clearTimeout(this[`_rvTimer_${i}`]); this[`_rvTimer_${i}`] = null; }
+      this[`_rvGuardUntil_${i}`] = 0; // ← THÊM DÒNG NÀY
     });
   }
 
@@ -187,6 +197,8 @@ class AiBoxCard extends HTMLElement {
     this._clearAllRoomVolTimers();
     clearTimeout(this._pendingBroadcastTimer); this._pendingBroadcastTimer = null;
     this._pendingBroadcastNextSong = false;
+    this._pendingRoomCmd = null;
+    this._pendingNextTitle = null;
     this._reconnectTimer = null; this._connectTimeout = null;
     this._spkReconnect = null; this._retryCountdownTimer = null;
     this._currentRoomIdx = idx;
@@ -278,14 +290,35 @@ class AiBoxCard extends HTMLElement {
   }
 
 
+  // Trích video_id từ YouTube thumbnail URL
+  // VD: https://i.ytimg.com/vi/4IT7N1CQCNc/hq720.jpg → "4IT7N1CQCNc"
+  _extractYtVideoId(thumbnailUrl) {
+    if (!thumbnailUrl) return null;
+    const m = thumbnailUrl.match(/ytimg\.com\/vi\/([^/?#]+)/);
+    return m ? m[1] : null;
+  }
+
+  // Tra cứu bài hát trong _songCache theo title (normalize)
+  _lookupSongByTitle(title) {
+    if (!title) return null;
+    const norm = t => (t || "").toLowerCase().replace(/\s+/g, " ").trim();
+    return this._songCache.find(s => norm(s.title) === norm(title)) || null;
+  }
+
   _buildPlayCmdFromCache(cache) {
     if (!cache) return null;
     // Zing: cần source + songId
     if (cache.source === "zing" && cache.songId)
-      return { action: "play_zing", song_id: cache.songId };
+      return {
+        action: "play_zing", song_id: cache.songId,
+        title: cache.title, artist: cache.artist, thumbnail_url: cache.thumb,
+      };
     // YouTube/URL: không cần kiểm tra source
     if (cache.videoId)
-      return { action: "play_song", video_id: cache.videoId };
+      return {
+        action: "play_song", video_id: cache.videoId,
+        title: cache.title, artist: cache.artist, thumbnail_url: cache.thumb,
+      };
     if (cache.url)
       return { action: "play_url", url: cache.url, title: cache.title, artist: cache.artist, thumbnail_url: cache.thumb };
     return null;
@@ -354,25 +387,33 @@ class AiBoxCard extends HTMLElement {
       try {
         const ws = new WebSocket(wsUrl);
         entry.ws = ws;
-        ws.onopen = () => {
-          entry.connected = true;
-          entry.pollTimer = setInterval(() => {
-            if (ws.readyState === 1) ws.send(JSON.stringify({ action: 'get_info' }));
-          }, 5000);
-          ws.send(JSON.stringify({ action: 'get_info' }));
-          const cmdToSend = entry._pendingCmd || this._buildPlayCmdFromCache(this._nowPlaying);
-          if (cmdToSend) {
-            setTimeout(() => {
-              if (ws.readyState === 1) ws.send(JSON.stringify(cmdToSend));
+          ws.onopen = () => {
+            entry.connected = true;
+            entry.pollTimer = setInterval(() => {
+              if (ws.readyState === 1) ws.send(JSON.stringify({ action: 'get_info' }));
+            }, 5000);
+            ws.send(JSON.stringify({ action: 'get_info' }));
+            const cmdToSend = entry._pendingCmd || this._buildPlayCmdFromCache(this._nowPlaying);
+            if (cmdToSend) {
+              setTimeout(() => {
+                if (ws.readyState === 1) ws.send(JSON.stringify(cmdToSend));
+                entry._pendingCmd = null;
+              }, 300);
+            } else {
               entry._pendingCmd = null;
-            }, 300);
-          } else {
-            entry._pendingCmd = null;
-          }
-          this._toast(`🔗 ${this._rooms[idx].name} linked`, "success");
-          this._renderSyncBar();
-          this._renderRoomVolumeSliders();
-        };
+              // Không có play cmd → hỏi trạng thái hiện tại để cập nhật UI
+              ws.send(JSON.stringify({ action: 'get_playback_state' }));
+            }
+            // FIX: đồng bộ volume master sang room mới
+            setTimeout(() => {
+              if (ws.readyState === 1) this._sendVolumeToRoom(idx, this._state.volume);
+            }, 500);
+            delete this._roomVolumes[idx];
+            this[`_rvGuardUntil_${idx}`] = 0;
+            this._toast(`🔗 ${this._rooms[idx].name} linked`, "success");
+            this._renderSyncBar();
+            this._renderRoomVolumeSliders();
+          };
         ws.onclose = () => {
           entry.connected = false;
           if (entry.pollTimer) { clearInterval(entry.pollTimer); entry.pollTimer = null; }
@@ -390,6 +431,7 @@ class AiBoxCard extends HTMLElement {
         ws.onmessage = (ev) => {
           try {
             const d = JSON.parse(ev.data);
+            // ── Volume ────────────────────────────────────────────
             const vol = (() => {
               if (d.type === "volume_state" && d.volume !== undefined) return Number(d.volume);
               if (d.type === "get_info" && d.data) {
@@ -402,6 +444,7 @@ class AiBoxCard extends HTMLElement {
               return null;
             })();
             if (vol !== null && vol !== this._roomVolumes[idx]) {
+              if (this[`_rvGuardUntil_${idx}`] && Date.now() < this[`_rvGuardUntil_${idx}`]) return;
               this._roomVolumes[idx] = vol;
               const sl = this.querySelector(`.room-vol-slider[data-rvidx="${idx}"]`);
               if (sl) {
@@ -409,6 +452,20 @@ class AiBoxCard extends HTMLElement {
                 const lbl = this.querySelector(`#rvl_${idx}`);
                 if (lbl) lbl.textContent = vol;
               }
+            }
+            // ── playback_state: lưu cache để hiển thị trên sync badge ──
+            if (d.type === "playback_state" && d.title) {
+              if (!this._roomPlayback) this._roomPlayback = {};
+              this._roomPlayback[idx] = {
+                title: d.title || "",
+                artist: d.artist || d.channel || "",
+                thumb: d.thumbnail_url || "",
+                isPlaying: !!d.is_playing,
+                source: d.source || "youtube",
+              };
+              // Cập nhật tooltip trên badge phòng
+              const badge = this.querySelector(`.sync-room-badge[data-srbidx="${idx}"]`);
+              if (badge && d.title) badge.title = d.title;
             }
           } catch(_) {}
         };
@@ -432,6 +489,7 @@ class AiBoxCard extends HTMLElement {
               else if (d.data) { s = d.data; }
               const vol = s.vol !== undefined ? Number(s.vol) : null;
               if (vol !== null && vol !== this._roomVolumes[idx]) {
+                if (this[`_rvGuardUntil_${idx}`] && Date.now() < this[`_rvGuardUntil_${idx}`]) return;
                 this._roomVolumes[idx] = vol;
                 const sl = this.querySelector(`.room-vol-slider[data-rvidx="${idx}"]`);
                 if (sl) {
@@ -440,6 +498,7 @@ class AiBoxCard extends HTMLElement {
                   if (lbl) lbl.textContent = vol;
                 }
               }
+
             } catch(_) {}
           };
           ws.onclose = () => {
@@ -498,7 +557,22 @@ class AiBoxCard extends HTMLElement {
     if (this._ws?.readyState === 1) {
       this._ws.send(JSON.stringify(obj));
     }
-    this._getSyncTargets().forEach(idx => this._sendToRoom(idx, obj));
+    const a = obj?.action;
+    const targets = this._getSyncTargets();
+    if (a === "play_song" || a === "play_zing" || a === "play_url" || a === "playlist_play") {
+      // Direct play: đánh dấu broadcast, gửi tuần tự cách 300ms
+      this._pendingRoomCmd = "broadcast";
+      this._pendingNextTitle = null;
+      targets.forEach((idx, i) => {
+        setTimeout(() => {
+          if (this._switching) return;
+          this._sendToRoom(idx, obj);
+        }, i * 300);
+      });
+    } else {
+      // Các lệnh khác (pause/resume/seek/stop): gửi đồng thời
+      targets.forEach(idx => this._sendToRoom(idx, obj));
+    }
   }
 
   _broadcastSpkCmd(obj) {
@@ -516,7 +590,9 @@ class AiBoxCard extends HTMLElement {
     if (entry.spkWs?.readyState === 1) {
       entry.spkWs.send(JSON.stringify({ type: "set_vol", vol }));
       entry.spkWs.send(JSON.stringify({ type: "send_message", what: 4, arg1: 5, arg2: vol }));
-    } else if (entry.ws?.readyState === 1) {
+    }
+    if (entry.ws?.readyState === 1) {
+      entry.ws.send(JSON.stringify({ action: "set_volume", value: vol }));
       entry.ws.send(JSON.stringify({ action: "set_volume", volume: vol }));
       entry.ws.send(JSON.stringify({ type: "set_vol", vol }));
       entry.ws.send(JSON.stringify({ type: "send_message", what: 4, arg1: 5, arg2: vol }));
@@ -527,22 +603,27 @@ class AiBoxCard extends HTMLElement {
   // MULTIROOM – Next/Prev
   // ════════════════════════════════════════════════════════════════════
 
+
   _triggerMasterNext() {
-    this._pendingBroadcastNextSong = true;
+    this._pendingRoomCmd = "next";
+    this._pendingNextTitle = null;
+    this._pendingBroadcastNextSong = false;
     clearTimeout(this._pendingBroadcastTimer);
-    this._pendingBroadcastTimer = setTimeout(() => {
-      this._pendingBroadcastNextSong = false;
-    }, 10000);
+    this._pendingBroadcastTimer = null;
+    // Stop rooms ngay để tránh phát nhầm bài cũ
+    this._getSyncTargets().forEach(idx => this._sendToRoom(idx, { action: "stop" }));
     this._send({ action: "next" });
     this._sendSpk({ type: 'send_message', what: 65536, arg1: 0, arg2: 1, obj: 'next' });
   }
 
   _triggerMasterPrev() {
-    this._pendingBroadcastNextSong = true;
+    this._pendingRoomCmd = "prev";
+    this._pendingNextTitle = null;
+    this._pendingBroadcastNextSong = false;
     clearTimeout(this._pendingBroadcastTimer);
-    this._pendingBroadcastTimer = setTimeout(() => {
-      this._pendingBroadcastNextSong = false;
-    }, 10000);
+    this._pendingBroadcastTimer = null;
+    // Stop rooms ngay để tránh phát nhầm bài cũ
+    this._getSyncTargets().forEach(idx => this._sendToRoom(idx, { action: "stop" }));
     this._send({ action: "prev" });
     this._sendSpk({ type: 'send_message', what: 65536, arg1: 0, arg2: 1, obj: 'pre' });
   }
@@ -630,11 +711,18 @@ class AiBoxCard extends HTMLElement {
                     if (typeof d.data === "string") { try { s = JSON.parse(d.data); } catch { s = d; } }
                     else if (d.data) { s = d.data; }
                     const vol = s.vol !== undefined ? Number(s.vol) : null;
+
                     if (vol !== null && vol !== this._roomVolumes[idx]) {
+                      if (this[`_rvGuardUntil_${idx}`] && Date.now() < this[`_rvGuardUntil_${idx}`]) return;
                       this._roomVolumes[idx] = vol;
                       const sl = this.querySelector(`.room-vol-slider[data-rvidx="${idx}"]`);
-                      if (sl) { sl.value = vol; const lbl = this.querySelector(`#rvl_${idx}`); if (lbl) lbl.textContent = vol; }
+                      if (sl) {
+                        sl.value = vol;
+                        const lbl = this.querySelector(`#rvl_${idx}`);
+                        if (lbl) lbl.textContent = vol;
+                      }
                     }
+                    
                   } catch(_) {}
                 };
                 ws.onclose = () => {
@@ -702,7 +790,11 @@ class AiBoxCard extends HTMLElement {
           ${targets.map(idx => {
             const entry = this._multiWs[idx];
             const ok = entry?.connected;
-            return `<span class="sync-room-badge ${ok ? 'ok' : 'pending'}">${this._esc(this._rooms[idx].name)}</span>`;
+            const rp = this._roomPlayback?.[idx];
+            const songTip = rp?.title ? `${rp.title}${rp.isPlaying ? ' ▶' : ' ⏸'}` : "";
+            return `<span class="sync-room-badge ${ok ? 'ok' : 'pending'}" data-srbidx="${idx}" title="${this._esc(songTip)}">
+              ${this._esc(this._rooms[idx].name)}${rp?.isPlaying ? ' ▶' : ''}
+            </span>`;
           }).join('')}
         </div>
         <div class="sync-bar-right">
@@ -823,7 +915,7 @@ class AiBoxCard extends HTMLElement {
           this._state.volume = v;
           this._volDragging = true;
           clearTimeout(this._volSendTimer);
-          this._volSendTimer = setTimeout(() => this._sendVolume(v), 100);
+          this._volSendTimer = setTimeout(() => this._broadcastVolume(v), 100);
           clearTimeout(this._volLockTimer);
           this._volLockTimer = setTimeout(() => { this._volDragging = false; }, 2000);
         } else {
@@ -840,7 +932,7 @@ class AiBoxCard extends HTMLElement {
         const v = parseInt(sl.value);
         if (ridx === this._currentRoomIdx) {
           this._state.volume = v;
-          this._sendVolume(v);
+          this._broadcastVolume(v);
           clearTimeout(this._volLockTimer);
           this._volLockTimer = setTimeout(() => { this._volDragging = false; }, 2000);
         } else {
@@ -920,6 +1012,7 @@ class AiBoxCard extends HTMLElement {
     clearTimeout(this._toastTimer); this._toastTimer = null;
     this._clearAllRoomVolTimers();
     clearTimeout(this._pendingBroadcastTimer); this._pendingBroadcastTimer = null;
+    this._pendingNextTitle = null;
     this._syncInProgress = false; this._syncGen++;
     if (this._visHandler) { document.removeEventListener('visibilitychange', this._visHandler); this._visHandler = null; }
   }
@@ -1059,7 +1152,14 @@ class AiBoxCard extends HTMLElement {
     this._closeSpkWs();
   }
 
-  _send(obj) { if (this._ws?.readyState === 1) this._ws.send(JSON.stringify(obj)); }
+  _send(obj) {
+    if (this._ws?.readyState === 1) this._ws.send(JSON.stringify(obj));
+    // Bộ nhớ tạm: đánh dấu khi user nhấn next/prev → chờ lấy thông tin bài rồi gửi sang rooms
+    const a = obj?.action;
+    if (a === "next" || a === "prev") {
+      this._pendingRoomCmd = a; // lưu "next" hoặc "prev" làm marker
+    }
+  }
 
   _spkWsUrl() { return `ws://${this._host}:${this._config.speaker_port || 8080}`; }
   _spkTunnelWsUrl() {
@@ -1151,6 +1251,19 @@ class AiBoxCard extends HTMLElement {
     this._send({ type: "send_message", what: 4, arg1: 5, arg2: vol });
     this._send({ action: "set_volume", value: vol });
     this._send({ action: "set_volume", volume: vol });
+  }
+
+  _broadcastVolume(vol) {
+    this._sendVolume(vol);
+    this._getSyncTargets().forEach(idx => {
+      this._sendVolumeToRoom(idx, vol);
+      this._roomVolumes[idx] = vol;
+      this[`_rvGuardUntil_${idx}`] = Date.now() + 3000; // ← THÊM DÒNG NÀY
+      const sl = this.querySelector(`.room-vol-slider[data-rvidx="${idx}"]`);
+      if (sl) sl.value = vol;
+      const lbl = this.querySelector(`#rvl_${idx}`);
+      if (lbl) lbl.textContent = vol;
+    });
   }
 
   _handleSpkMsg(raw) {
@@ -2165,7 +2278,7 @@ select.form-inp{cursor:pointer}
         this._state.volume = v;
         const l = this.querySelector("#volLabel"); if (l) l.textContent = `Mức ${v}`;
         clearTimeout(this._volSendTimer);
-        this._volSendTimer = setTimeout(() => this._sendVolume(v), 100);
+        this._volSendTimer = setTimeout(() => this._broadcastVolume(v), 100);
         clearTimeout(this._volLockTimer);
         this._volLockTimer = setTimeout(() => { this._volDragging = false; }, 2000);
       };
@@ -2173,7 +2286,7 @@ select.form-inp{cursor:pointer}
         clearTimeout(this._volSendTimer);
         const v = parseInt(vs.value, 10);
         this._state.volume = v;
-        this._sendVolume(v);
+        this._broadcastVolume(v);
         clearTimeout(this._volLockTimer);
         this._volLockTimer = setTimeout(() => { this._volDragging = false; }, 2000);
       };
@@ -2382,7 +2495,12 @@ select.form-inp{cursor:pointer}
     if (!playlists.length) { el.innerHTML = '<div style="text-align:center;padding:12px;color:rgba(226,232,240,.35);font-size:11px">Chưa có playlist</div>'; return; }
     el.innerHTML = playlists.map((pl, i) => `<div class="pl-item"><span class="pl-name">${this._esc(pl.name || "Playlist")}</span><span class="pl-count">${pl.song_count || 0} bài</span><div class="pl-btns"><button class="form-btn sm green" data-plplay="${i}">▶</button><button class="form-btn sm" data-plview="${i}">👁</button><button class="form-btn sm danger" data-pldel="${i}">✕</button></div></div>`).join("");
     playlists.forEach((pl, i) => {
-      this._on(`[data-plplay="${i}"]`, () => { this._send({ action: "playlist_play", playlist_id: pl.id }); this._toast(`▶ ${pl.name}`, "success"); });
+      this._on(`[data-plplay="${i}"]`, () => {
+        // Request playlist songs để populate _songCache
+        this._send({ action: "playlist_get_songs", playlist_id: pl.id });
+        this._send({ action: "playlist_play", playlist_id: pl.id });
+        this._toast(`▶ ${pl.name}`, "success");
+      });
       this._on(`[data-plview="${i}"]`, () => this._send({ action: "playlist_get_songs", playlist_id: pl.id }));
       this._on(`[data-pldel="${i}"]`, () => { if (confirm(`Xóa "${pl.name}"?`)) { this._send({ action: "playlist_delete", playlist_id: pl.id }); } });
     });
@@ -2417,8 +2535,18 @@ select.form-inp{cursor:pointer}
     if (d.type === "wifi_scan_result") { this._state.wifiNetworks = d.networks || []; this._renderWifiScan(); return; }
     if (["wifi_status","wifi_get_status_result","wifi_status_result","wifi_info"].includes(d.type)) { this._state.wifiStatus = d; this._renderWifiStatus(); return; }
     if (d.type === "wifi_saved_result" || d.type === "wifi_saved_list") { this._state.wifiSaved = d.networks || []; this._renderWifiSaved(); return; }
-    if (d.type === "search_result") { this._renderSearchResults(d.songs || d.results || [], "youtube"); return; }
-    if (d.type === "zing_result") { this._renderSearchResults(d.songs || d.results || [], "zing"); return; }
+    if (d.type === "search_result") {
+      const songs = d.songs || d.results || [];
+      // Reset _songCache với kết quả YouTube mới
+      this._songCache = songs.map(s => ({ source: "youtube", id: s.video_id || s.id, title: s.title || "", artist: s.channel || s.artist || "", thumb: s.thumbnail_url || "", duration: s.duration_seconds || 0 }));
+      this._renderSearchResults(songs, "youtube"); return;
+    }
+    if (d.type === "zing_result") {
+      const songs = d.songs || d.results || [];
+      // Reset _songCache với kết quả Zing mới
+      this._songCache = songs.map(s => ({ source: "zing", id: s.song_id || s.id, title: s.title || "", artist: s.artist || "", thumb: s.thumbnail_url || "", duration: s.duration_seconds || 0 }));
+      this._renderSearchResults(songs, "zing"); return;
+    }
     if (d.type === "playlist_result") { this._renderSearchResults(d.songs || d.playlists || d.results || [], "playlist"); return; }
     if (d.type === "playlist_list_result") { this._renderPlaylistList(d.playlists || []); return; }
     if (d.type === "playlist_created") {
@@ -2436,11 +2564,43 @@ select.form-inp{cursor:pointer}
       this._toast("🗑 Đã xóa bài khỏi playlist", "success"); return;
     }
     if (d.type === "playlist_play_started") {
+      this._activePlaylistId = d.playlist_id ?? null;
+      // Reset cache cũ, fetch bài mới từ playlist để nạp vào _songCache
+      this._songCache = [];
+      if (this._activePlaylistId != null) {
+        this._send({ action: "playlist_get_songs", playlist_id: this._activePlaylistId });
+      }
       this._toast(`▶ Đang phát: ${this._esc(d.playlist_name || "")}`, "success"); return;
     }
     if (d.type === "playlist_songs_result") {
       this._state.playlistSongs = d.songs || [];
       const plId = d.playlist_id;
+      // Lưu vào _songCache (reset toàn bộ bằng bài trong playlist)
+      this._songCache = (d.songs || []).map(s => ({
+        source:   s.source || "youtube",
+        id:       s.id || s.song_id || s.video_id || "",
+        title:    s.title || "",
+        artist:   s.artist || s.channel || "",
+        thumb:    s.thumbnail_url || "",
+        duration: s.duration_seconds || 0,
+      }));
+      // Retry nếu đang chờ gửi sang rooms (playlist cache vừa về)
+      if (this._pendingNextTitle) {
+        const cached = this._lookupSongByTitle(this._pendingNextTitle);
+        if (cached) {
+          this._pendingNextTitle = null;
+          const targets = this._getSyncTargets();
+          const playCmd = cached.source === "zing"
+            ? { action: "play_zing", song_id: cached.id, title: cached.title, artist: cached.artist, thumbnail_url: cached.thumb }
+            : { action: "play_song", video_id: cached.id, title: cached.title, artist: cached.artist, thumbnail_url: cached.thumb };
+          // Stop trước, gửi play tuần tự
+          targets.forEach(idx => this._sendToRoom(idx, { action: "stop" }));
+          targets.forEach((idx, i) => setTimeout(() => {
+            if (this._switching) return;
+            this._sendToRoom(idx, playCmd);
+          }, i * 300 + 100));
+        }
+      }
       const el = this.querySelector("#plSongs"); if (!el) return;
       el.classList.remove("hidden");
       el.innerHTML = `<div class="fx jcb aic mb6"><span style="font-size:10px;font-weight:700;color:rgba(226,232,240,.6)">📋 ${this._esc(d.playlist_name||'')} (${(d.songs||[]).length} bài)</span><button class="form-btn sm" id="closePlSongs">✕</button></div>` +
@@ -2543,6 +2703,13 @@ select.form-inp{cursor:pointer}
       m.source = d.source || "youtube"; m.isPlaying = !!d.is_playing;
       m.title = d.title || "Không có nhạc"; m.artist = d.artist || d.channel || "---";
       m.thumb = d.thumbnail_url || "";
+      // FIX: Xóa stale track IDs khi title đổi — tránh gửi sai bài cho rooms
+      if (newTitle && prevTitle && newTitle !== prevTitle) {
+        m.videoId = "";
+        m.songId  = "";
+        m.url     = "";
+        this._lastZingSongId = "";
+      }
       if (d.url) m.url = d.url;
       if (d.video_id) m.videoId = d.video_id;
       // API Zing không trả song_id trong playback_state → dùng _lastZingSongId
@@ -2569,33 +2736,82 @@ select.form-inp{cursor:pointer}
         this._updateNowPlayingCache();
       }
 
-      // ── Build play command từ cache ───────────────────────────
-      const _buildPlayCmdSnapshot = () => this._buildPlayCmdFromCache(this._nowPlaying);
-
-      if (this._pendingBroadcastNextSong && m.isPlaying && newTitle && newTitle !== prevTitle) {
-        clearTimeout(this._pendingBroadcastTimer);
-        this._pendingBroadcastTimer    = null;
-        this._pendingBroadcastNextSong = false;
-        const cmd = _buildPlayCmdSnapshot();
-        if (cmd) this._getSyncTargets().forEach(idx => this._sendToRoom(idx, cmd));
-        this._autoSyncDoneForSong = false;
-        this._lastSyncSongTitle   = "";
-      } else if (!this._pendingBroadcastNextSong && m.isPlaying && newTitle && newTitle !== prevTitle) {
-        const targets = this._getSyncTargets();
-        if (targets.length > 0 && this._config.sync_send_song !== false) {
-          const cmd = _buildPlayCmdSnapshot();
-          if (cmd) {
-            setTimeout(() => {
-              if (this._switching) return;
-              targets.forEach(idx => this._sendToRoom(idx, cmd));
-            }, 1000);
+      // ── Đồng bộ bài hát sang rooms khi master chuyển bài ────────────────
+      // _pendingRoomCmd: null=auto-next | "next"/"prev"=manual | "broadcast"=direct play
+      // ── Đồng bộ bài hát sang rooms khi master chuyển bài ────────────────
+      // _pendingRoomCmd: "next"/"prev" = manual | "broadcast" = direct play | null = auto-next
+      //
+      // YouTube: thumbnail_url chứa video_id → extract và gửi play_song trực tiếp
+      // Zing: không có song_id trong playback_state → gửi "next" (rooms tự advance queue)
+      //
+      if (newTitle && newTitle !== prevTitle) {
+        const prc = this._pendingRoomCmd;
+        if (prc === "broadcast") {
+          // Direct play: rooms đã nhận lệnh → chỉ clear
+          this._pendingRoomCmd = null;
+        } else {
+          // Manual next/prev hoặc auto-next: chờ is_playing=true rồi gửi play cmd trực tiếp
+          if (!this._pendingNextTitle) {
+            this._pendingNextTitle = newTitle;
           }
+          this._pendingRoomCmd = null;
         }
         this._autoSyncDoneForSong = false;
         this._lastSyncSongTitle   = "";
       }
 
-      if (m.isPlaying && !wasPlaying) this._scheduleAutoSync();
+      // ── Fire: is_playing=true + có title mới → tra _songCache rồi gửi tuần tự ──
+      if (this._pendingNextTitle && this._pendingNextTitle === m.title && m.isPlaying) {
+        const waitTitle = this._pendingNextTitle;
+        const targets = this._getSyncTargets();
+
+        // Helper gửi lần lượt sang rooms (stop trước, play sau)
+        const _sendSeq = (playCmd) => {
+          this._pendingNextTitle = null;
+          if (!targets.length || this._config.sync_send_song === false) return;
+          // 1. Stop tất cả rooms ngay lập tức
+          targets.forEach(idx => this._sendToRoom(idx, { action: "stop" }));
+          // 2. Gửi play cmd tuần tự cách 300ms/phòng
+          targets.forEach((idx, i) => {
+            setTimeout(() => {
+              if (this._switching) return;
+              this._sendToRoom(idx, playCmd);
+            }, i * 300 + 100); // +100ms sau stop
+          });
+        };
+
+        if (targets.length > 0 && this._config.sync_send_song !== false) {
+          // 1. Tra _songCache (kết quả search / bài trong playlist đã load)
+          const cached = this._lookupSongByTitle(waitTitle);
+          if (cached) {
+            const playCmd = cached.source === "zing"
+              ? { action: "play_zing", song_id: cached.id, title: cached.title, artist: cached.artist, thumbnail_url: cached.thumb }
+              : { action: "play_song", video_id: cached.id, title: cached.title, artist: cached.artist, thumbnail_url: cached.thumb };
+            _sendSeq(playCmd);
+
+          } else if (m.source === "youtube") {
+            // 2. Fallback YouTube: extract video_id từ thumbnail URL (luôn có)
+            const vid = this._extractYtVideoId(m.thumb);
+            _sendSeq(vid
+              ? { action: "play_song", video_id: vid, title: m.title, artist: m.artist, thumbnail_url: m.thumb }
+              : { action: "next" });
+
+          } else if (m.source === "zing" && this._activePlaylistId) {
+            // 3. Zing + đang phát playlist → re-fetch để lấy song_id rồi retry
+            // _pendingNextTitle giữ nguyên, sau khi playlist_songs_result về sẽ retry
+            this._send({ action: "playlist_get_songs", playlist_id: this._activePlaylistId });
+            // pendingNextTitle chưa null → sẽ được xử lý trong playlist_songs_result
+
+          } else if (m.source === "zing" && this._lastZingSongId) {
+            // 4. Fallback Zing: dùng _lastZingSongId
+            _sendSeq({ action: "play_zing", song_id: this._lastZingSongId, title: m.title, artist: m.artist, thumbnail_url: m.thumb });
+
+          } else {
+            // 5. Không có gì → next
+            _sendSeq({ action: "next" });
+          }
+        }
+      }
       if (m.isPlaying && newTitle !== prevTitle) {
         clearTimeout(this._autoSyncTimer);
         this._autoSyncDoneForSong = false;
@@ -2874,7 +3090,7 @@ window.customCards.push({ type: "aibox-webui-card", name: "AI BOX WebUI Card", d
 
 // ── Cache-buster ─────────────────────────────────────────────────────────────
 (function() {
-  const BUILD_TS = "20260304-v7.7-sync-on-connect";
+  const BUILD_TS = "20260305-v7.21-stop-lookup-retry";
   const SK = "aibox_card_build";
 
   try {
