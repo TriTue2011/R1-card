@@ -1,0 +1,70 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Phicomm R1",
+        "description": "Connect Home Assistant to your Phicomm R1 (HTTP bridge or native WebSocket).",
+        "data": {
+          "name": "Name",
+          "host": "Host",
+          "port": "Port",
+          "aibox_ws_port": "Media WS port (YouTube/Zing)",
+          "scan_interval": "Scan interval (seconds)",
+          "use_media_dispatch": "Use /media-dispatch for playback control",
+          "protocol": "Protocol mode (auto/http_bridge/ws_native)",
+          "endpoint_do_cmd": "Endpoint for shell command",
+          "endpoint_adb_cmd": "Endpoint for ADB command",
+          "endpoint_keyevent": "Endpoint for key event",
+          "endpoint_media_dispatch": "Endpoint for media dispatch",
+          "param_command": "Query parameter for command",
+          "param_keycode": "Query parameter for keycode",
+          "param_media_key": "Query parameter for media action",
+          "response_code_key": "Response field for status code",
+          "response_message_key": "Response field for message",
+          "response_result_key": "Response field for result",
+          "response_success_code": "Success code value"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "invalid_response": "Invalid API response",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This device is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Phicomm R1 options",
+        "data": {
+          "name": "Name",
+          "host": "Host",
+          "port": "Port",
+          "aibox_ws_port": "Media WS port (YouTube/Zing)",
+          "scan_interval": "Scan interval (seconds)",
+          "use_media_dispatch": "Use /media-dispatch for playback control",
+          "protocol": "Protocol mode (auto/http_bridge/ws_native)",
+          "endpoint_do_cmd": "Endpoint for shell command",
+          "endpoint_adb_cmd": "Endpoint for ADB command",
+          "endpoint_keyevent": "Endpoint for key event",
+          "endpoint_media_dispatch": "Endpoint for media dispatch",
+          "param_command": "Query parameter for command",
+          "param_keycode": "Query parameter for keycode",
+          "param_media_key": "Query parameter for media action",
+          "response_code_key": "Response field for status code",
+          "response_message_key": "Response field for message",
+          "response_result_key": "Response field for result",
+          "response_success_code": "Success code value"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "invalid_response": "Invalid API response",
+      "unknown": "Unexpected error"
+    }
+  }
+}
