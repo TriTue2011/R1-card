@@ -98,6 +98,27 @@ SERVICE_STEREO_DISABLE = "stereo_disable"
 SERVICE_STEREO_SET_CHANNEL = "stereo_set_channel"
 SERVICE_STEREO_GET_STATE = "stereo_get_state"
 SERVICE_REFRESH_STATE = "refresh_state"
+SERVICE_AIBOX_SEND_ACTION = "aibox_send_action"
+SERVICE_WIFI_SCAN = "wifi_scan"
+SERVICE_WIFI_CONNECT = "wifi_connect"
+SERVICE_WIFI_DELETE_SAVED = "wifi_delete_saved"
+SERVICE_WIFI_GET_STATUS = "wifi_get_status"
+SERVICE_MAC_GET = "mac_get"
+SERVICE_MAC_RANDOM = "mac_random"
+SERVICE_MAC_RESTORE = "mac_restore"
+SERVICE_OTA_GET = "ota_get"
+SERVICE_OTA_SET = "ota_set"
+SERVICE_ALARM_LIST = "alarm_list"
+SERVICE_ALARM_ADD = "alarm_add"
+SERVICE_ALARM_DELETE = "alarm_delete"
+SERVICE_ALARM_TOGGLE = "alarm_toggle"
+SERVICE_GET_SYSTEM_INFO = "get_system_info"
+SERVICE_SET_VOICE = "set_voice"
+SERVICE_GET_VOICE = "get_voice"
+SERVICE_SET_TIKTOK_REPLY = "set_tiktok_reply"
+SERVICE_SET_LIVE2D = "set_live2d"
+SERVICE_HASS_SET = "hass_set"
+SERVICE_HASS_GET = "hass_get"
 
 ATTR_KEYCODE = "keycode"
 ATTR_COMMAND = "command"
@@ -135,6 +156,22 @@ ATTR_CONTROL_NAME = "control_name"
 ATTR_VALUE = "value"
 ATTR_POSITION = "position"
 ATTR_CHANNEL = "channel"
+ATTR_ACTION = "action"
+ATTR_DATA = "data"
+ATTR_SSID = "ssid"
+ATTR_PASSWORD = "password"
+ATTR_URL = "url"
+ATTR_HOUR = "hour"
+ATTR_MINUTE = "minute"
+ATTR_REPEAT = "repeat"
+ATTR_DAYS = "days"
+ATTR_VOLUME = "volume"
+ATTR_YOUTUBE_URL = "youtube_url"
+ATTR_ALARM_ID = "alarm_id"
+ATTR_VOICE_ID = "voice_id"
+ATTR_MODEL = "model"
+ATTR_AGENT_ID = "agent_id"
+ATTR_API_KEY = "api_key"
 
 MEDIA_ACTION_TO_KEYCODE: dict[str, int] = {
     "play": KEYCODE_MEDIA_PLAY_PAUSE,
@@ -481,6 +518,131 @@ async def async_setup_entry(
         {},
         "async_refresh_state",
     )
+    platform.async_register_entity_service(
+        SERVICE_AIBOX_SEND_ACTION,
+        {
+            vol.Required(ATTR_ACTION): cv.string,
+            vol.Optional(ATTR_DATA, default="{}"): cv.string,
+        },
+        "async_aibox_send_action",
+    )
+    platform.async_register_entity_service(
+        SERVICE_WIFI_SCAN,
+        {},
+        "async_wifi_scan",
+    )
+    platform.async_register_entity_service(
+        SERVICE_WIFI_CONNECT,
+        {
+            vol.Required(ATTR_SSID): cv.string,
+            vol.Optional(ATTR_PASSWORD, default=""): cv.string,
+        },
+        "async_wifi_connect",
+    )
+    platform.async_register_entity_service(
+        SERVICE_WIFI_DELETE_SAVED,
+        {vol.Required(ATTR_SSID): cv.string},
+        "async_wifi_delete_saved",
+    )
+    platform.async_register_entity_service(
+        SERVICE_WIFI_GET_STATUS,
+        {},
+        "async_wifi_get_status",
+    )
+    platform.async_register_entity_service(
+        SERVICE_MAC_GET,
+        {},
+        "async_mac_get",
+    )
+    platform.async_register_entity_service(
+        SERVICE_MAC_RANDOM,
+        {},
+        "async_mac_random",
+    )
+    platform.async_register_entity_service(
+        SERVICE_MAC_RESTORE,
+        {},
+        "async_mac_restore",
+    )
+    platform.async_register_entity_service(
+        SERVICE_OTA_GET,
+        {},
+        "async_ota_get",
+    )
+    platform.async_register_entity_service(
+        SERVICE_OTA_SET,
+        {vol.Required(ATTR_URL): cv.string},
+        "async_ota_set",
+    )
+    platform.async_register_entity_service(
+        SERVICE_ALARM_LIST,
+        {},
+        "async_alarm_list",
+    )
+    platform.async_register_entity_service(
+        SERVICE_ALARM_ADD,
+        {
+            vol.Required(ATTR_HOUR): vol.All(vol.Coerce(int), vol.Range(min=0, max=23)),
+            vol.Required(ATTR_MINUTE): vol.All(vol.Coerce(int), vol.Range(min=0, max=59)),
+            vol.Optional(ATTR_REPEAT, default=""): cv.string,
+            vol.Optional(ATTR_DAYS, default=""): cv.string,
+            vol.Optional(ATTR_VOLUME, default=-1): vol.Coerce(int),
+            vol.Optional(ATTR_YOUTUBE_URL, default=""): cv.string,
+        },
+        "async_alarm_add",
+    )
+    platform.async_register_entity_service(
+        SERVICE_ALARM_DELETE,
+        {vol.Required(ATTR_ALARM_ID): cv.string},
+        "async_alarm_delete",
+    )
+    platform.async_register_entity_service(
+        SERVICE_ALARM_TOGGLE,
+        {
+            vol.Required(ATTR_ALARM_ID): cv.string,
+            vol.Required(ATTR_ENABLED): cv.boolean,
+        },
+        "async_alarm_toggle",
+    )
+    platform.async_register_entity_service(
+        SERVICE_GET_SYSTEM_INFO,
+        {},
+        "async_get_system_info",
+    )
+    platform.async_register_entity_service(
+        SERVICE_SET_VOICE,
+        {vol.Required(ATTR_VOICE_ID): vol.Coerce(int)},
+        "async_set_voice",
+    )
+    platform.async_register_entity_service(
+        SERVICE_GET_VOICE,
+        {},
+        "async_get_voice",
+    )
+    platform.async_register_entity_service(
+        SERVICE_SET_TIKTOK_REPLY,
+        {vol.Required(ATTR_ENABLED): cv.boolean},
+        "async_set_tiktok_reply",
+    )
+    platform.async_register_entity_service(
+        SERVICE_SET_LIVE2D,
+        {vol.Required(ATTR_MODEL): cv.string},
+        "async_set_live2d",
+    )
+    platform.async_register_entity_service(
+        SERVICE_HASS_SET,
+        {
+            vol.Optional(ATTR_URL, default=""): cv.string,
+            vol.Optional(ATTR_AGENT_ID, default=""): cv.string,
+            vol.Optional(ATTR_API_KEY, default=""): cv.string,
+        },
+        "async_hass_set",
+    )
+    platform.async_register_entity_service(
+        SERVICE_HASS_GET,
+        {},
+        "async_hass_get",
+    )
 
 
 class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerEntity):
@@ -544,6 +706,16 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
         self._led_state: dict[str, Any] = {}
         self._stereo_state: dict[str, Any] = {}
         self._system_state: dict[str, Any] = {}
+        self._last_action_result: dict[str, Any] = {}
+        self._wifi_data: dict[str, Any] = {}
+        self._mac_data: dict[str, Any] = {}
+        self._ota_data: dict[str, Any] = {}
+        self._alarm_data: dict[str, Any] = {}
+        self._system_info_data: dict[str, Any] = {}
+        self._voice_data: dict[str, Any] = {}
+        self._tiktok_data: dict[str, Any] = {}
+        self._live2d_data: dict[str, Any] = {}
+        self._hass_config_data: dict[str, Any] = {}
 
     @property
     def available(self) -> bool:
@@ -678,6 +850,27 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
         edge_light = self._system_state.get("edge_light")
         if isinstance(edge_light, dict) and edge_light:
             attrs["edge_light"] = dict(edge_light)
+
+        if self._last_action_result:
+            attrs["last_action_result"] = self._last_action_result
+        if self._wifi_data:
+            attrs["wifi_data"] = self._wifi_data
+        if self._mac_data:
+            attrs["mac_data"] = self._mac_data
+        if self._ota_data:
+            attrs["ota_data"] = self._ota_data
+        if self._alarm_data:
+            attrs["alarm_data"] = self._alarm_data
+        if self._system_info_data:
+            attrs["system_info"] = self._system_info_data
+        if self._voice_data:
+            attrs["voice_data"] = self._voice_data
+        if self._tiktok_data:
+            attrs["tiktok_data"] = self._tiktok_data
+        if self._live2d_data:
+            attrs["live2d_data"] = self._live2d_data
+        if self._hass_config_data:
+            attrs["hass_config"] = self._hass_config_data
 
         return attrs
 
@@ -1892,3 +2085,118 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
         last_search = self._last_search or {}
         search_source = str(last_search.get("source", "")).strip().lower()
         return search_source in {"youtube", "youtube_playlist", "zingmp3"}
+
+    # ── New services: generic action, WiFi, MAC, OTA, alarms, system, voice, TikTok, Live2D, HA ──
+
+    async def async_aibox_send_action(self, action: str, data: str = "{}") -> None:
+        """Send generic action to AiboxPlus WS."""
+        import json as _json
+        import time as _time
+        extra = _json.loads(data) if data and data != "{}" else {}
+        response = await self._client.async_aibox_send_action(action, extra)
+        self._last_action_result = {"action": action, "response": response, "ts": _time.time()}
+        self.async_write_ha_state()
+
+    async def async_wifi_scan(self) -> None:
+        """Scan WiFi networks."""
+        self._wifi_data = await self._client.async_wifi_scan()
+        self._wifi_data["_type"] = "scan"
+        self.async_write_ha_state()
+
+    async def async_wifi_connect(self, ssid: str, password: str = "") -> None:
+        """Connect to WiFi."""
+        result = await self._client.async_wifi_connect(ssid, password)
+        self._wifi_data = {**result, "_type": "connect"}
+        self.async_write_ha_state()
+
+    async def async_wifi_delete_saved(self, ssid: str) -> None:
+        """Delete saved WiFi network."""
+        result = await self._client.async_wifi_delete_saved(ssid)
+        self._wifi_data = {**result, "_type": "delete"}
+        self.async_write_ha_state()
+
+    async def async_wifi_get_status(self) -> None:
+        """Get WiFi status."""
+        self._wifi_data = await self._client.async_wifi_get_status()
+        self._wifi_data["_type"] = "status"
+        self.async_write_ha_state()
+
+    async def async_mac_get(self) -> None:
+        """Get MAC address."""
+        self._mac_data = await self._client.async_mac_get()
+        self.async_write_ha_state()
+
+    async def async_mac_random(self) -> None:
+        """Set random MAC."""
+        self._mac_data = await self._client.async_mac_random()
+        self.async_write_ha_state()
+
+    async def async_mac_restore(self) -> None:
+        """Restore real MAC."""
+        self._mac_data = await self._client.async_mac_restore()
+        self.async_write_ha_state()
+
+    async def async_ota_get(self) -> None:
+        """Get OTA config."""
+        self._ota_data = await self._client.async_ota_get()
+        self.async_write_ha_state()
+
+    async def async_ota_set(self, url: str) -> None:
+        """Set OTA URL."""
+        self._ota_data = await self._client.async_ota_set(url)
+        self.async_write_ha_state()
+
+    async def async_alarm_list(self) -> None:
+        """List alarms."""
+        self._alarm_data = await self._client.async_alarm_list()
+        self.async_write_ha_state()
+
+    async def async_alarm_add(self, hour: int, minute: int, repeat: str = "", days: str = "", volume: int = -1, youtube_url: str = "") -> None:
+        """Add alarm."""
+        self._alarm_data = await self._client.async_alarm_add(hour, minute, repeat, days, volume, youtube_url)
+        self.async_write_ha_state()
+
+    async def async_alarm_delete(self, alarm_id: str) -> None:
+        """Delete alarm."""
+        self._alarm_data = await self._client.async_alarm_delete(alarm_id)
+        self.async_write_ha_state()
+
+    async def async_alarm_toggle(self, alarm_id: str, enabled: bool) -> None:
+        """Toggle alarm."""
+        self._alarm_data = await self._client.async_alarm_toggle(alarm_id, enabled)
+        self.async_write_ha_state()
+
+    async def async_get_system_info(self) -> None:
+        """Get system info."""
+        self._system_info_data = await self._client.async_get_system_info()
+        self.async_write_ha_state()
+
+    async def async_set_voice(self, voice_id: int) -> None:
+        """Set TTS voice."""
+        self._voice_data = await self._client.async_set_voice(voice_id)
+        self.async_write_ha_state()
+
+    async def async_get_voice(self) -> None:
+        """Get current voice."""
+        self._voice_data = await self._client.async_get_voice()
+        self.async_write_ha_state()
+
+    async def async_set_tiktok_reply(self, enabled: bool) -> None:
+        """Set TikTok reply mode."""
+        self._tiktok_data = await self._client.async_set_tiktok_reply(enabled)
+        self.async_write_ha_state()
+
+    async def async_set_live2d(self, model: str) -> None:
+        """Set Live2D model."""
+        self._live2d_data = await self._client.async_set_live2d(model)
+        self.async_write_ha_state()
+
+    async def async_hass_set(self, url: str = "", agent_id: str = "", api_key: str = "") -> None:
+        """Set HA config on device."""
+        self._hass_config_data = await self._client.async_hass_set(url, agent_id, api_key)
+        self.async_write_ha_state()
+
+    async def async_hass_get(self) -> None:
+        """Get HA config from device."""
+        self._hass_config_data = await self._client.async_hass_get()
+        self.async_write_ha_state()
