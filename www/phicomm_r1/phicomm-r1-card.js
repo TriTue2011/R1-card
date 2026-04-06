@@ -101,6 +101,48 @@ class PhicommR1Card extends HTMLElement {
     this._lastSystemStateRequestAt = 0;
     this._dangChoKetQuaTimKiem = false;
     this._timKiemDangCho = null;
+
+    // --- Ported features state ---
+    this._voiceId = 1;
+    this._live2dModel = "hiyori";
+    this._tiktokReply = false;
+    this._audioTab = "eq";
+
+    this._surroundWidth = 40;
+    this._surroundPresence = 30;
+    this._surroundSpace = 10;
+
+    this._dacBassVol = 231;
+    this._dacHighVol = 231;
+
+    this._alarms = [];
+    this._alarmDialogOpen = false;
+    this._alarmHour = 7;
+    this._alarmMinute = 0;
+    this._alarmRepeat = "";
+    this._alarmDays = "";
+    this._alarmVolume = -1;
+    this._alarmYoutubeUrl = "";
+
+    this._cpuPercent = 0;
+    this._ramPercent = 0;
+    this._macAddress = "--";
+    this._macType = "";
+
+    this._otaServers = [];
+    this._otaSelected = "";
+
+    this._hassUrl = "";
+    this._hassAgentId = "";
+    this._hassApiKey = "";
+
+    this._wifiScanning = false;
+    this._wifiScanResults = [];
+    this._wifiSavedNetworks = [];
+    this._wifiStatus = "";
+    this._wifiPasswordDialog = false;
+    this._wifiPasswordSsid = "";
+    this._wifiPasswordInput = "";
   }
 
   static getStubConfig() {
@@ -539,6 +581,11 @@ class PhicommR1Card extends HTMLElement {
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#039;");
+  }
+
+  _dbStr(v) {
+    const db = (Number(v) || 231) - 231;
+    return (db >= 0 ? "+" : "") + db + " dB";
   }
 
   _dinhDangThoiLuong(totalSeconds) {
@@ -1083,6 +1130,48 @@ class PhicommR1Card extends HTMLElement {
     }
 
     this._dongBoLichSuChatTuEntity(attrs.last_chat_items);
+
+    // --- Ported features sync ---
+    const voiceData = attrs.voice_data || {};
+    if (voiceData.voice_id !== undefined) {
+      this._voiceId = Number(voiceData.voice_id) || 1;
+    }
+    const live2dData = attrs.live2d_data || {};
+    if (live2dData.model) {
+      this._live2dModel = String(live2dData.model);
+    }
+    const tiktokData = attrs.tiktok_data || {};
+    if (tiktokData.enabled !== undefined) {
+      this._tiktokReply = Boolean(tiktokData.enabled);
+    }
+
+    const alarmData = attrs.alarm_data || {};
+    if (Array.isArray(alarmData.alarms)) {
+      this._alarms = alarmData.alarms;
+    } else if (Array.isArray(alarmData.list)) {
+      this._alarms = alarmData.list;
+    }
+
+    const sysInfo = attrs.system_info || {};
+    if (sysInfo.cpu !== undefined) this._cpuPercent = Number(sysInfo.cpu) || 0;
+    if (sysInfo.ram !== undefined) this._ramPercent = Number(sysInfo.ram) || 0;
+
+    const macData = attrs.mac_data || {};
+    if (macData.mac) this._macAddress = String(macData.mac);
+    if (macData.type) this._macType = String(macData.type);
+
+    const otaData = attrs.ota_data || {};
+    if (Array.isArray(otaData.servers)) this._otaServers = otaData.servers;
+    if (otaData.current) this._otaSelected = String(otaData.current);
+
+    const hassConfig = attrs.hass_config || {};
+    if (hassConfig.url !== undefined) this._hassUrl = String(hassConfig.url || "");
+    if (hassConfig.agent_id !== undefined) this._hassAgentId = String(hassConfig.agent_id || "");
+
+    const wifiData = attrs.wifi_data || {};
+    if (Array.isArray(wifiData.scan_results)) this._wifiScanResults = wifiData.scan_results;
+    if (Array.isArray(wifiData.saved)) this._wifiSavedNetworks = wifiData.saved;
+    if (wifiData.status) this._wifiStatus = String(wifiData.status);
   }
 
   async _goiDichVu(domain, service, data = {}) {
@@ -2371,6 +2460,32 @@ class PhicommR1Card extends HTMLElement {
   }
 
   _veTabDieuKhien() {
+    let voiceOpts = "";
+    for (let i = 1; i <= 30; i++) {
+      voiceOpts += `<option value="${i}" ${this._voiceId === i ? "selected" : ""}>${i}. ${VOICES[i]}</option>`;
+    }
+    const alarmListHtml = this._alarms.length === 0
+      ? `<div class="small" style="text-align:center;padding:8px;">Chưa có báo thức</div>`
+      : this._alarms.map((a, idx) => {
+          const timeStr = `${String(a.hour ?? a.h ?? 0).padStart(2, "0")}:${String(a.minute ?? a.m ?? 0).padStart(2, "0")}`;
+          const enabled = a.enabled !== false;
+          const id = a.id ?? a.alarm_id ?? idx;
+          return `
+            <div class="alarm-item">
+              <div class="alarm-info">
+                <strong>${timeStr}</strong>
+                <span class="small">${this._maHoaHtml(a.repeat || a.days || "")}</span>
+              </div>
+              <div class="alarm-actions">
+                <label class="switch">
+                  <input type="checkbox" class="alarm-toggle" data-alarm-id="${id}" ${enabled ? "checked" : ""} />
+                  <span class="slider"></span>
+                </label>
+                <button class="mini-btn danger-mini alarm-delete" data-alarm-id="${id}">Xóa</button>
+              </div>
+            </div>
+          `;
+        }).join("");
     return `
       <section class="panel" aria-label="Control">
         <div class="tile">
@@ -2401,6 +2516,25 @@ class PhicommR1Card extends HTMLElement {
         </div>
 
         <div class="tile">
+          <div class="label-line"><strong>Chọn Giọng Nói AI</strong></div>
+          <div class="voice-row">
+            <select id="voice-sel" class="form-select">${voiceOpts}</select>
+            <button id="voice-preview" class="mini-btn">Play</button>
+          </div>
+        </div>
+
+        <div class="tile">
+          <div class="label-line"><strong>Chọn Model Live2D</strong></div>
+          <select id="live2d-sel" class="form-select">
+            <option value="hiyori" ${this._live2dModel === "hiyori" ? "selected" : ""}>Hiyori</option>
+            <option value="mao" ${this._live2dModel === "mao" ? "selected" : ""}>Mao</option>
+            <option value="miara" ${this._live2dModel === "miara" ? "selected" : ""}>Miara</option>
+            <option value="nicole" ${this._live2dModel === "nicole" ? "selected" : ""}>Nicole</option>
+            <option value="changli" ${this._live2dModel === "changli" ? "selected" : ""}>Changli</option>
+          </select>
+        </div>
+
+        <div class="tile">
           <div class="label-line">
             <strong>DLNA</strong>
             <label class="switch">
@@ -2422,6 +2556,58 @@ class PhicommR1Card extends HTMLElement {
               <span class="slider"></span>
             </label>
           </div>
+        </div>
+
+        <div class="tile">
+          <div class="label-line"><strong>Surround Sound</strong></div>
+          <div class="label-line"><span>Width</span><strong id="sur-w-val">${this._surroundWidth}</strong></div>
+          <input id="sur-width" type="range" min="0" max="100" value="${this._surroundWidth}" />
+          <div class="label-line"><span>Presence</span><strong id="sur-p-val">${this._surroundPresence}</strong></div>
+          <input id="sur-presence" type="range" min="0" max="100" value="${this._surroundPresence}" />
+          <div class="label-line"><span>Space</span><strong id="sur-s-val">${this._surroundSpace}</strong></div>
+          <input id="sur-space" type="range" min="0" max="100" value="${this._surroundSpace}" />
+          <div class="actions-inline">
+            <button class="mini-btn sur-preset" data-sur="cinema">Cinema</button>
+            <button class="mini-btn sur-preset" data-sur="wide">Wide Space</button>
+            <button class="mini-btn sur-preset" data-sur="reset">Reset</button>
+          </div>
+        </div>
+
+        <div class="tile">
+          <div class="label-line"><strong>Dải Trung-Cao (DAC Mixer)</strong></div>
+          <div class="label-line"><span>Âm trầm trung</span><strong id="dac-bv-val">${this._dbStr(this._dacBassVol)}</strong></div>
+          <input id="dac-bass-vol" type="range" min="211" max="251" value="${this._dacBassVol}" />
+          <div class="label-line"><span>Âm nốt cao</span><strong id="dac-hv-val">${this._dbStr(this._dacHighVol)}</strong></div>
+          <input id="dac-high-vol" type="range" min="211" max="251" value="${this._dacHighVol}" />
+        </div>
+
+        <div class="tile">
+          <div class="label-line">
+            <strong>Báo thức</strong>
+            <div class="alarm-header-actions">
+              <button id="alarm-add" class="mini-btn">+ Thêm</button>
+              <button id="alarm-refresh" class="mini-btn">Refresh</button>
+            </div>
+          </div>
+          <div id="alarm-list">${alarmListHtml}</div>
+          ${this._alarmDialogOpen ? `
+            <div class="alarm-dialog tile in-tile">
+              <div class="label-line"><strong>Thêm báo thức</strong></div>
+              <div class="alarm-time-row">
+                <input id="alarm-hour" type="number" min="0" max="23" value="${this._alarmHour}" class="alarm-time-input" />
+                <span>:</span>
+                <input id="alarm-minute" type="number" min="0" max="59" value="${this._alarmMinute}" class="alarm-time-input" />
+              </div>
+              <div class="label-line"><span>Nhãn lặp</span></div>
+              <input id="alarm-repeat" type="text" class="text-input" placeholder="vd: daily, weekdays" value="${this._maHoaHtml(this._alarmRepeat)}" />
+              <div class="label-line"><span>Ngày (0-6, CN=0)</span></div>
+              <input id="alarm-days" type="text" class="text-input" placeholder="vd: 1,2,3,4,5" value="${this._maHoaHtml(this._alarmDays)}" />
+              <div class="actions-inline" style="margin-top:8px;">
+                <button id="alarm-save" class="mini-btn">Lưu</button>
+                <button id="alarm-cancel" class="mini-btn">Hủy</button>
+              </div>
+            </div>
+          ` : ""}
         </div>
       </section>
     `;
@@ -2527,6 +2713,10 @@ class PhicommR1Card extends HTMLElement {
                 <ha-icon icon="mdi:send"></ha-icon>
               </button>
             </div>
+            <button id="tiktok-toggle" class="tiktok-btn ${this._tiktokReply ? "is-on" : ""}">
+              <span class="tiktok-dot ${this._tiktokReply ? "is-on" : ""}"></span>
+              <span>TikTok Reply: ${this._tiktokReply ? "ON" : "OFF"}</span>
+            </button>
           </div>
         </div>
       </section>
@@ -2679,6 +2869,117 @@ class PhicommR1Card extends HTMLElement {
               <input id="edge-light-intensity" type="range" min="0" max="100" step="1" value="${this._edgeLightIntensity}" />
             </div>
           `}
+        </div>
+
+        <div class="tile">
+          <h4 class="sub-section-title"><ha-icon icon="mdi:chip"></ha-icon> Thông tin hệ thống</h4>
+          <div class="sys-stat-row">
+            <div class="sys-stat-label">CPU</div>
+            <div class="sys-stat-value" id="cpu-val">${this._cpuPercent}%</div>
+            <div class="stat-bar-wrap"><div class="stat-bar cpu" style="width:${Math.min(100, this._cpuPercent)}%"></div></div>
+          </div>
+          <div class="sys-stat-row">
+            <div class="sys-stat-label">RAM</div>
+            <div class="sys-stat-value" id="ram-val">${this._ramPercent}%</div>
+            <div class="stat-bar-wrap"><div class="stat-bar ram" style="width:${Math.min(100, this._ramPercent)}%"></div></div>
+          </div>
+          <button id="sys-info-refresh" class="mini-btn" style="margin-top:6px;">Refresh</button>
+        </div>
+
+        <div class="tile">
+          <h4 class="sub-section-title"><ha-icon icon="mdi:network"></ha-icon> MAC Address</h4>
+          <div class="label-line">
+            <span id="mac-val">${this._maHoaHtml(this._macAddress)}</span>
+            <span class="small">${this._maHoaHtml(this._macType)}</span>
+          </div>
+          <div class="actions-inline">
+            <button id="mac-get" class="mini-btn">Refresh</button>
+            <button id="mac-random" class="mini-btn">Random</button>
+            <button id="mac-restore" class="mini-btn danger-mini">MAC thực</button>
+          </div>
+        </div>
+
+        <div class="tile">
+          <h4 class="sub-section-title"><ha-icon icon="mdi:update"></ha-icon> OTA Server</h4>
+          <select id="ota-sel" class="form-select">
+            ${this._otaServers.length === 0
+              ? `<option value="">-- Chưa có --</option>`
+              : this._otaServers.map(s => {
+                  const val = typeof s === "string" ? s : (s.url || s.value || "");
+                  const label = typeof s === "string" ? s : (s.name || s.label || val);
+                  return `<option value="${this._maHoaHtml(val)}" ${val === this._otaSelected ? "selected" : ""}>${this._maHoaHtml(label)}</option>`;
+                }).join("")}
+          </select>
+          <div class="actions-inline" style="margin-top:6px;">
+            <button id="ota-refresh" class="mini-btn">Refresh</button>
+            <button id="ota-save" class="mini-btn">Lưu</button>
+          </div>
+        </div>
+
+        <div class="tile">
+          <h4 class="sub-section-title"><ha-icon icon="mdi:home-assistant"></ha-icon> Home Assistant</h4>
+          <div class="form-group">
+            <label class="form-label">HA URL</label>
+            <input id="hass-url" type="text" class="text-input" placeholder="http://192.168.x.x:8123" value="${this._maHoaHtml(this._hassUrl)}" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Agent ID</label>
+            <input id="hass-agent" type="text" class="text-input" placeholder="conversation.xxx" value="${this._maHoaHtml(this._hassAgentId)}" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">API Key</label>
+            <input id="hass-key" type="password" class="text-input" placeholder="eyJ..." value="${this._maHoaHtml(this._hassApiKey)}" />
+          </div>
+          <button id="hass-save" class="mini-btn" style="margin-top:6px;">Lưu HASS</button>
+        </div>
+
+        <div class="tile">
+          <h4 class="sub-section-title"><ha-icon icon="mdi:wifi"></ha-icon> WiFi</h4>
+          <div id="wifi-status" class="small">${this._maHoaHtml(this._wifiStatus)}</div>
+          <div class="actions-inline" style="margin-top:6px;">
+            <button id="wifi-scan" class="mini-btn">${this._wifiScanning ? "Đang quét..." : "Quét WiFi"}</button>
+            <button id="wifi-saved" class="mini-btn">Đã lưu</button>
+          </div>
+          ${this._wifiScanResults.length > 0 ? `
+            <div class="wifi-list">
+              <div class="small" style="margin:6px 0 4px;"><strong>Mạng tìm thấy:</strong></div>
+              ${this._wifiScanResults.map(w => {
+                const ssid = w.ssid || w.SSID || w.name || "Unknown";
+                const signal = w.signal || w.rssi || w.level || "";
+                return `
+                  <div class="wifi-item">
+                    <span>${this._maHoaHtml(ssid)}</span>
+                    <span class="small">${signal ? signal + " dBm" : ""}</span>
+                    <button class="mini-btn wifi-connect" data-ssid="${this._maHoaHtml(ssid)}">Kết nối</button>
+                  </div>
+                `;
+              }).join("")}
+            </div>
+          ` : ""}
+          ${this._wifiSavedNetworks.length > 0 ? `
+            <div class="wifi-list">
+              <div class="small" style="margin:6px 0 4px;"><strong>Mạng đã lưu:</strong></div>
+              ${this._wifiSavedNetworks.map(w => {
+                const ssid = w.ssid || w.SSID || w.name || "Unknown";
+                return `
+                  <div class="wifi-item">
+                    <span>${this._maHoaHtml(ssid)}</span>
+                    <button class="mini-btn danger-mini wifi-delete" data-ssid="${this._maHoaHtml(ssid)}">Xóa</button>
+                  </div>
+                `;
+              }).join("")}
+            </div>
+          ` : ""}
+          ${this._wifiPasswordDialog ? `
+            <div class="tile in-tile" style="margin-top:8px;">
+              <div class="small"><strong>Kết nối: ${this._maHoaHtml(this._wifiPasswordSsid)}</strong></div>
+              <input id="wifi-password" type="password" class="text-input" placeholder="Mật khẩu WiFi" value="${this._maHoaHtml(this._wifiPasswordInput)}" />
+              <div class="actions-inline" style="margin-top:6px;">
+                <button id="wifi-connect-confirm" class="mini-btn">Kết nối</button>
+                <button id="wifi-connect-cancel" class="mini-btn">Hủy</button>
+              </div>
+            </div>
+          ` : ""}
         </div>
 
         <div class="tile">
@@ -4877,6 +5178,152 @@ class PhicommR1Card extends HTMLElement {
             font-size: 12px;
           }
         }
+
+        /* --- Ported feature styles --- */
+        .form-select {
+          width: 100%;
+          padding: 8px 10px;
+          border-radius: 8px;
+          border: 1px solid var(--line);
+          background: var(--bg-soft);
+          color: var(--text);
+          font-size: 13px;
+          appearance: auto;
+        }
+        .voice-row {
+          display: flex;
+          gap: 8px;
+          align-items: center;
+        }
+        .voice-row .form-select { flex: 1; }
+
+        .form-group {
+          margin-bottom: 8px;
+        }
+        .form-label {
+          font-size: 11px;
+          color: var(--muted);
+          margin-bottom: 3px;
+          display: block;
+        }
+
+        .alarm-header-actions {
+          display: flex;
+          gap: 6px;
+        }
+        .alarm-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 8px 0;
+          border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+        .alarm-item:last-child { border-bottom: none; }
+        .alarm-info { display: flex; flex-direction: column; gap: 2px; }
+        .alarm-actions { display: flex; gap: 8px; align-items: center; }
+        .alarm-time-row {
+          display: flex;
+          gap: 6px;
+          align-items: center;
+          margin: 6px 0;
+        }
+        .alarm-time-input {
+          width: 60px;
+          padding: 6px 8px;
+          border-radius: 8px;
+          border: 1px solid var(--line);
+          background: var(--bg-soft);
+          color: var(--text);
+          font-size: 16px;
+          text-align: center;
+        }
+        .alarm-dialog { margin-top: 8px; }
+
+        .danger-mini {
+          color: #ef4444 !important;
+          border-color: rgba(239, 68, 68, 0.4) !important;
+        }
+
+        .tiktok-btn {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 14px;
+          margin-top: 8px;
+          border-radius: 10px;
+          border: 1px solid var(--line);
+          background: var(--bg-tile);
+          color: var(--muted);
+          font-size: 13px;
+          cursor: pointer;
+          width: 100%;
+          justify-content: center;
+          transition: all 0.2s;
+        }
+        .tiktok-btn.is-on {
+          background: linear-gradient(135deg, rgba(255, 0, 80, 0.2), rgba(0, 200, 255, 0.15));
+          border-color: rgba(255, 0, 80, 0.4);
+          color: var(--text);
+        }
+        .tiktok-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: var(--muted);
+          transition: background 0.2s;
+        }
+        .tiktok-dot.is-on {
+          background: #00ff88;
+          box-shadow: 0 0 6px #00ff88;
+        }
+
+        .sys-stat-row {
+          margin-bottom: 8px;
+        }
+        .sys-stat-label {
+          font-size: 12px;
+          color: var(--muted);
+          margin-bottom: 2px;
+        }
+        .sys-stat-value {
+          font-size: 14px;
+          font-weight: 700;
+          color: var(--text);
+          margin-bottom: 4px;
+        }
+        .stat-bar-wrap {
+          width: 100%;
+          height: 6px;
+          border-radius: 3px;
+          background: rgba(255, 255, 255, 0.08);
+          overflow: hidden;
+        }
+        .stat-bar {
+          height: 100%;
+          border-radius: 3px;
+          transition: width 0.5s ease;
+        }
+        .stat-bar.cpu {
+          background: linear-gradient(90deg, var(--accent), var(--accent-2));
+        }
+        .stat-bar.ram {
+          background: linear-gradient(90deg, #34d399, #38bdf8);
+        }
+
+        .wifi-list {
+          margin-top: 6px;
+        }
+        .wifi-item {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          padding: 6px 0;
+          border-bottom: 1px solid rgba(255,255,255,0.06);
+          font-size: 12px;
+        }
+        .wifi-item:last-child { border-bottom: none; }
+        .wifi-item span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       </style>
 
       <ha-card>
@@ -4969,6 +5416,8 @@ class PhicommR1Card extends HTMLElement {
       await this._goiDichVu("phicomm_r1", "wake_word_get_enabled");
       await this._goiDichVu("phicomm_r1", "wake_word_get_sensitivity");
       await this._goiDichVu("phicomm_r1", "custom_ai_get_enabled");
+      this._goiDichVu("phicomm_r1", "get_voice").catch(() => {});
+      this._goiDichVu("phicomm_r1", "alarm_list").catch(() => {});
       await this._lamMoiEntity(220);
     } catch (err) {
       console.warn("control bootstrap refresh failed", err);
@@ -4981,6 +5430,10 @@ class PhicommR1Card extends HTMLElement {
     this._lastSystemStateRequestAt = now;
     try {
       await this._goiDichVu("phicomm_r1", "refresh_state");
+      this._goiDichVu("phicomm_r1", "get_system_info").catch(() => {});
+      this._goiDichVu("phicomm_r1", "mac_get").catch(() => {});
+      this._goiDichVu("phicomm_r1", "ota_get").catch(() => {});
+      this._goiDichVu("phicomm_r1", "hass_get").catch(() => {});
       await this._lamMoiEntity(250, 2);
     } catch (err) {
       console.warn("system bootstrap refresh failed", err);
@@ -5725,6 +6178,300 @@ class PhicommR1Card extends HTMLElement {
     if (rebootBtn) {
       rebootBtn.addEventListener("click", async () => {
         await this._goiDichVu("phicomm_r1", "reboot");
+      });
+    }
+
+    // --- Voice selector ---
+    const voiceSel = root.getElementById("voice-sel");
+    if (voiceSel) {
+      voiceSel.addEventListener("change", async (ev) => {
+        this._voiceId = Number(ev.target.value) || 1;
+        await this._goiDichVu("phicomm_r1", "set_voice", { voice_id: this._voiceId });
+        await this._lamMoiEntity(250);
+      });
+    }
+    const voicePreview = root.getElementById("voice-preview");
+    if (voicePreview) {
+      voicePreview.addEventListener("click", () => {
+        const vid = this._voiceId || 1;
+        const a = new Audio(VBASE + (VFILES[vid] || "ngocanh") + ".mp3");
+        a.play().catch(() => console.warn("Voice preview failed"));
+      });
+    }
+
+    // --- Live2D selector ---
+    const live2dSel = root.getElementById("live2d-sel");
+    if (live2dSel) {
+      live2dSel.addEventListener("change", async (ev) => {
+        this._live2dModel = ev.target.value;
+        await this._goiDichVu("phicomm_r1", "set_live2d", { model: this._live2dModel });
+        await this._lamMoiEntity(250);
+      });
+    }
+
+    // --- Surround sliders ---
+    const surWidth = root.getElementById("sur-width");
+    if (surWidth) {
+      surWidth.addEventListener("input", (ev) => {
+        this._surroundWidth = Number(ev.target.value);
+        const lbl = root.getElementById("sur-w-val");
+        if (lbl) lbl.textContent = this._surroundWidth;
+      });
+      surWidth.addEventListener("change", async (ev) => {
+        this._surroundWidth = Number(ev.target.value);
+        await this._goiDichVu("phicomm_r1", "set_mixer_value", {
+          control_name: "Surround Width", value: String(this._surroundWidth),
+        });
+      });
+    }
+    const surPresence = root.getElementById("sur-presence");
+    if (surPresence) {
+      surPresence.addEventListener("input", (ev) => {
+        this._surroundPresence = Number(ev.target.value);
+        const lbl = root.getElementById("sur-p-val");
+        if (lbl) lbl.textContent = this._surroundPresence;
+      });
+    }
+    const surSpace = root.getElementById("sur-space");
+    if (surSpace) {
+      surSpace.addEventListener("input", (ev) => {
+        this._surroundSpace = Number(ev.target.value);
+        const lbl = root.getElementById("sur-s-val");
+        if (lbl) lbl.textContent = this._surroundSpace;
+      });
+    }
+    root.querySelectorAll(".sur-preset").forEach((el) => {
+      el.addEventListener("click", () => {
+        let w, p, s;
+        if (el.dataset.sur === "cinema") { w = 70; p = 50; s = 30; }
+        else if (el.dataset.sur === "wide") { w = 90; p = 40; s = 60; }
+        else { w = 40; p = 30; s = 10; }
+        this._surroundWidth = w; this._surroundPresence = p; this._surroundSpace = s;
+        this._veGiaoDien();
+        this._goiDichVu("phicomm_r1", "set_mixer_value", {
+          control_name: "Surround Width", value: String(w),
+        });
+      });
+    });
+
+    // --- DAC Mixer sliders ---
+    const dacBassVol = root.getElementById("dac-bass-vol");
+    if (dacBassVol) {
+      dacBassVol.addEventListener("input", (ev) => {
+        this._dacBassVol = Number(ev.target.value);
+        const lbl = root.getElementById("dac-bv-val");
+        if (lbl) lbl.textContent = this._dbStr(this._dacBassVol);
+      });
+      dacBassVol.addEventListener("change", async (ev) => {
+        this._dacBassVol = Number(ev.target.value);
+        await this._goiDichVu("phicomm_r1", "set_mixer_value", {
+          control_name: "DAC Digital Volume L", value: String(this._dacBassVol),
+        });
+      });
+    }
+    const dacHighVol = root.getElementById("dac-high-vol");
+    if (dacHighVol) {
+      dacHighVol.addEventListener("input", (ev) => {
+        this._dacHighVol = Number(ev.target.value);
+        const lbl = root.getElementById("dac-hv-val");
+        if (lbl) lbl.textContent = this._dbStr(this._dacHighVol);
+      });
+      dacHighVol.addEventListener("change", async (ev) => {
+        this._dacHighVol = Number(ev.target.value);
+        await this._goiDichVu("phicomm_r1", "set_mixer_value", {
+          control_name: "DAC Digital Volume R", value: String(this._dacHighVol),
+        });
+      });
+    }
+
+    // --- Alarms ---
+    const alarmAdd = root.getElementById("alarm-add");
+    if (alarmAdd) {
+      alarmAdd.addEventListener("click", () => {
+        this._alarmDialogOpen = true;
+        this._alarmHour = 7; this._alarmMinute = 0;
+        this._alarmRepeat = ""; this._alarmDays = "";
+        this._veGiaoDien();
+      });
+    }
+    const alarmRefresh = root.getElementById("alarm-refresh");
+    if (alarmRefresh) {
+      alarmRefresh.addEventListener("click", async () => {
+        await this._goiDichVu("phicomm_r1", "alarm_list");
+        await this._lamMoiEntity(300);
+      });
+    }
+    const alarmSave = root.getElementById("alarm-save");
+    if (alarmSave) {
+      alarmSave.addEventListener("click", async () => {
+        const h = Number(root.getElementById("alarm-hour")?.value || 7);
+        const m = Number(root.getElementById("alarm-minute")?.value || 0);
+        const rep = root.getElementById("alarm-repeat")?.value || "";
+        const days = root.getElementById("alarm-days")?.value || "";
+        await this._goiDichVu("phicomm_r1", "alarm_add", {
+          hour: h, minute: m, repeat: rep, days: days,
+        });
+        this._alarmDialogOpen = false;
+        await this._lamMoiEntity(300);
+        await this._goiDichVu("phicomm_r1", "alarm_list");
+        await this._lamMoiEntity(300);
+      });
+    }
+    const alarmCancel = root.getElementById("alarm-cancel");
+    if (alarmCancel) {
+      alarmCancel.addEventListener("click", () => {
+        this._alarmDialogOpen = false;
+        this._veGiaoDien();
+      });
+    }
+    root.querySelectorAll(".alarm-toggle").forEach((el) => {
+      el.addEventListener("change", async (ev) => {
+        const id = el.dataset.alarmId;
+        const enabled = Boolean(ev.target.checked);
+        await this._goiDichVu("phicomm_r1", "alarm_toggle", { alarm_id: id, enabled });
+        await this._lamMoiEntity(250);
+      });
+    });
+    root.querySelectorAll(".alarm-delete").forEach((el) => {
+      el.addEventListener("click", async () => {
+        const id = el.dataset.alarmId;
+        if (!confirm("Xóa báo thức này?")) return;
+        await this._goiDichVu("phicomm_r1", "alarm_delete", { alarm_id: id });
+        await this._lamMoiEntity(300);
+        await this._goiDichVu("phicomm_r1", "alarm_list");
+        await this._lamMoiEntity(300);
+      });
+    });
+
+    // --- TikTok Reply ---
+    const tiktokToggle = root.getElementById("tiktok-toggle");
+    if (tiktokToggle) {
+      tiktokToggle.addEventListener("click", async () => {
+        this._tiktokReply = !this._tiktokReply;
+        await this._goiDichVu("phicomm_r1", "set_tiktok_reply", { enabled: this._tiktokReply });
+        this._veGiaoDien();
+      });
+    }
+
+    // --- System Info ---
+    const sysInfoRefresh = root.getElementById("sys-info-refresh");
+    if (sysInfoRefresh) {
+      sysInfoRefresh.addEventListener("click", async () => {
+        await this._goiDichVu("phicomm_r1", "get_system_info");
+        await this._lamMoiEntity(300);
+      });
+    }
+
+    // --- MAC Address ---
+    const macGet = root.getElementById("mac-get");
+    if (macGet) {
+      macGet.addEventListener("click", async () => {
+        await this._goiDichVu("phicomm_r1", "mac_get");
+        await this._lamMoiEntity(300);
+      });
+    }
+    const macRandom = root.getElementById("mac-random");
+    if (macRandom) {
+      macRandom.addEventListener("click", async () => {
+        if (!confirm("Random MAC sẽ có thể mất quyền. Tiếp tục?")) return;
+        await this._goiDichVu("phicomm_r1", "mac_random");
+        await this._lamMoiEntity(300);
+      });
+    }
+    const macRestore = root.getElementById("mac-restore");
+    if (macRestore) {
+      macRestore.addEventListener("click", async () => {
+        await this._goiDichVu("phicomm_r1", "mac_restore");
+        await this._lamMoiEntity(300);
+      });
+    }
+
+    // --- OTA ---
+    const otaRefresh = root.getElementById("ota-refresh");
+    if (otaRefresh) {
+      otaRefresh.addEventListener("click", async () => {
+        await this._goiDichVu("phicomm_r1", "ota_get");
+        await this._lamMoiEntity(300);
+      });
+    }
+    const otaSave = root.getElementById("ota-save");
+    if (otaSave) {
+      otaSave.addEventListener("click", async () => {
+        const sel = root.getElementById("ota-sel");
+        const url = sel?.value || "";
+        if (url) {
+          await this._goiDichVu("phicomm_r1", "ota_set", { url });
+          await this._lamMoiEntity(300);
+        }
+      });
+    }
+
+    // --- HA Settings ---
+    const hassSave = root.getElementById("hass-save");
+    if (hassSave) {
+      hassSave.addEventListener("click", async () => {
+        const url = root.getElementById("hass-url")?.value?.trim() || "";
+        const agentId = root.getElementById("hass-agent")?.value?.trim() || "";
+        const apiKey = root.getElementById("hass-key")?.value?.trim() || "";
+        await this._goiDichVu("phicomm_r1", "hass_set", {
+          url, agent_id: agentId, api_key: apiKey,
+        });
+        await this._lamMoiEntity(300);
+      });
+    }
+
+    // --- WiFi ---
+    const wifiScan = root.getElementById("wifi-scan");
+    if (wifiScan) {
+      wifiScan.addEventListener("click", async () => {
+        this._wifiScanning = true;
+        this._veGiaoDien();
+        await this._goiDichVu("phicomm_r1", "wifi_scan");
+        await this._lamMoiEntity(500);
+        this._wifiScanning = false;
+        this._veGiaoDien();
+      });
+    }
+    const wifiSaved = root.getElementById("wifi-saved");
+    if (wifiSaved) {
+      wifiSaved.addEventListener("click", async () => {
+        await this._goiDichVu("phicomm_r1", "wifi_get_status");
+        await this._lamMoiEntity(300);
+      });
+    }
+    root.querySelectorAll(".wifi-connect").forEach((el) => {
+      el.addEventListener("click", () => {
+        this._wifiPasswordDialog = true;
+        this._wifiPasswordSsid = el.dataset.ssid || "";
+        this._wifiPasswordInput = "";
+        this._veGiaoDien();
+      });
+    });
+    root.querySelectorAll(".wifi-delete").forEach((el) => {
+      el.addEventListener("click", async () => {
+        const ssid = el.dataset.ssid || "";
+        if (!confirm(`Xóa mạng "${ssid}" đã lưu?`)) return;
+        await this._goiDichVu("phicomm_r1", "wifi_delete_saved", { ssid });
+        await this._lamMoiEntity(300);
+      });
+    });
+    const wifiConnectConfirm = root.getElementById("wifi-connect-confirm");
+    if (wifiConnectConfirm) {
+      wifiConnectConfirm.addEventListener("click", async () => {
+        const pw = root.getElementById("wifi-password")?.value || "";
+        await this._goiDichVu("phicomm_r1", "wifi_connect", {
+          ssid: this._wifiPasswordSsid, password: pw,
+        });
+        this._wifiPasswordDialog = false;
+        await this._lamMoiEntity(500);
+        this._veGiaoDien();
+      });
+    }
+    const wifiConnectCancel = root.getElementById("wifi-connect-cancel");
+    if (wifiConnectCancel) {
+      wifiConnectCancel.addEventListener("click", () => {
+        this._wifiPasswordDialog = false;
+        this._veGiaoDien();
       });
     }
   }
