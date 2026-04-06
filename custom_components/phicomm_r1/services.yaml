@@ -753,3 +753,293 @@ refresh_state:
     entity:
       integration: phicomm_r1
       domain: media_player
+
+aibox_send_action:
+  name: Send AiboxPlus action
+  description: Send generic action to AiboxPlus WS (port 8082).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    action:
+      required: true
+      example: system_info
+      selector:
+        text:
+    data:
+      required: false
+      default: "{}"
+      example: '{"key":"value"}'
+      selector:
+        text:
+
+wifi_scan:
+  name: WiFi scan
+  description: Scan for available WiFi networks.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+wifi_connect:
+  name: WiFi connect
+  description: Connect to a WiFi network.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    ssid:
+      required: true
+      selector:
+        text:
+    password:
+      required: false
+      default: ""
+      selector:
+        text:
+
+wifi_delete_saved:
+  name: WiFi delete saved
+  description: Delete a saved WiFi network.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    ssid:
+      required: true
+      selector:
+        text:
+
+wifi_get_status:
+  name: WiFi get status
+  description: Get current WiFi connection status.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+mac_get:
+  name: Get MAC address
+  description: Get current MAC address.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+mac_random:
+  name: Random MAC
+  description: Set a random MAC address.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+mac_restore:
+  name: Restore MAC
+  description: Restore the real MAC address.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+ota_get:
+  name: Get OTA config
+  description: Get OTA server configuration.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+ota_set:
+  name: Set OTA URL
+  description: Set OTA update server URL.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    url:
+      required: true
+      selector:
+        text:
+
+alarm_list:
+  name: List alarms
+  description: List all configured alarms.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+alarm_add:
+  name: Add alarm
+  description: Add a new alarm.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    hour:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 23
+          mode: box
+    minute:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 59
+          mode: box
+    repeat:
+      required: false
+      default: ""
+      selector:
+        text:
+    days:
+      required: false
+      default: ""
+      selector:
+        text:
+    volume:
+      required: false
+      default: -1
+      selector:
+        number:
+          mode: box
+    youtube_url:
+      required: false
+      default: ""
+      selector:
+        text:
+
+alarm_delete:
+  name: Delete alarm
+  description: Delete an alarm by id.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    alarm_id:
+      required: true
+      selector:
+        text:
+
+alarm_toggle:
+  name: Toggle alarm
+  description: Enable or disable an alarm.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    alarm_id:
+      required: true
+      selector:
+        text:
+    enabled:
+      required: true
+      selector:
+        boolean:
+
+get_system_info:
+  name: Get system info
+  description: Get CPU, RAM, and device system information.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+set_voice:
+  name: Set TTS voice
+  description: Set the TTS voice ID (1-30).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    voice_id:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 30
+          mode: box
+
+get_voice:
+  name: Get TTS voice
+  description: Get the current TTS voice setting.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+set_tiktok_reply:
+  name: Set TikTok reply
+  description: Enable or disable TikTok reply mode.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    enabled:
+      required: true
+      selector:
+        boolean:
+
+set_live2d:
+  name: Set Live2D model
+  description: Set Live2D avatar model.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    model:
+      required: true
+      selector:
+        select:
+          options:
+            - hiyori
+            - mao
+            - miara
+            - nicole
+            - changli
+
+hass_set:
+  name: Set HA config
+  description: Set Home Assistant connection settings on device.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    url:
+      required: false
+      default: ""
+      selector:
+        text:
+    agent_id:
+      required: false
+      default: ""
+      selector:
+        text:
+    api_key:
+      required: false
+      default: ""
+      selector:
+        text:
+
+hass_get:
+  name: Get HA config
+  description: Get Home Assistant connection settings from device.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player

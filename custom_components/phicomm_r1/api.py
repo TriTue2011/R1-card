@@ -2136,3 +2136,134 @@ class PhicommR1ApiClient:
             await self._ws_lay_thong_tin()
             return
         await self.async_get_model()
+
+    # ── Generic AiboxPlus action ───────────────────────────────────────
+
+    async def async_aibox_send_action(self, action: str, extra_data: dict | None = None) -> dict:
+        """Send generic action to AiboxPlus WS and return response."""
+        payload: dict[str, Any] = {"action": action}
+        if extra_data:
+            payload.update(extra_data)
+        try:
+            response = await self._aibox_gui_va_cho(payload, expect_type={action, f"{action}_result", "result"})
+            return response or {}
+        except PhicommR1ApiConnectionError:
+            await self._aibox_chi_gui(payload)
+            return {}
+
+    # ── WiFi ───────────────────────────────────────────────────────────
+
+    async def async_wifi_scan(self) -> dict:
+        """Scan for WiFi networks."""
+        return await self._aibox_gui_va_cho({"action": "wifi_scan"}, expect_type={"wifi_scan", "wifi_scan_result"}) or {}
+
+    async def async_wifi_connect(self, ssid: str, password: str = "") -> dict:
+        """Connect to a WiFi network."""
+        payload: dict[str, Any] = {"action": "wifi_connect", "ssid": ssid}
+        if password:
+            payload["password"] = password
+        return await self._aibox_gui_va_cho(payload, expect_type={"wifi_connect", "wifi_connect_result"}) or {}
+
+    async def async_wifi_delete_saved(self, ssid: str) -> dict:
+        """Delete a saved WiFi network."""
+        return await self._aibox_gui_va_cho({"action": "wifi_delete_saved", "ssid": ssid}, expect_type={"wifi_delete_saved"}) or {}
+
+    async def async_wifi_get_status(self) -> dict:
+        """Get current WiFi status."""
+        return await self._aibox_gui_va_cho({"action": "wifi_status"}, expect_type={"wifi_status"}) or {}
+
+    # ── MAC ────────────────────────────────────────────────────────────
+
+    async def async_mac_get(self) -> dict:
+        """Get current MAC address."""
+        return await self._aibox_gui_va_cho({"action": "mac_get"}, expect_type={"mac_get", "mac_info"}) or {}
+
+    async def async_mac_random(self) -> dict:
+        """Set a random MAC address."""
+        return await self._aibox_gui_va_cho({"action": "mac_random"}, expect_type={"mac_random", "mac_info"}) or {}
+
+    async def async_mac_restore(self) -> dict:
+        """Restore the real MAC address."""
+        return await self._aibox_gui_va_cho({"action": "mac_real"}, expect_type={"mac_real", "mac_info"}) or {}
+
+    # ── OTA ────────────────────────────────────────────────────────────
+
+    async def async_ota_get(self) -> dict:
+        """Get OTA update information."""
+        return await self._aibox_gui_va_cho({"action": "ota_get"}, expect_type={"ota_get", "ota_info"}) or {}
+
+    async def async_ota_set(self, url: str) -> dict:
+        """Set OTA update URL."""
+        return await self._aibox_gui_va_cho({"action": "ota_set", "url": url}, expect_type={"ota_set"}) or {}
+
+    # ── Alarms ─────────────────────────────────────────────────────────
+
+    async def async_alarm_list(self) -> dict:
+        """List all alarms."""
+        return await self._aibox_gui_va_cho({"action": "alarm_list"}, expect_type={"alarm_list", "alarm_data"}) or {}
+
+    async def async_alarm_add(self, hour: int, minute: int, repeat: str = "", days: str = "", volume: int = -1, youtube_url: str = "") -> dict:
+        """Add a new alarm."""
+        payload: dict[str, Any] = {"action": "alarm_add", "hour": hour, "minute": minute}
+        if repeat:
+            payload["repeat"] = repeat
+        if days:
+            payload["days"] = days
+        if volume >= 0:
+            payload["volume"] = volume
+        if youtube_url:
+            payload["youtube_url"] = youtube_url
+        return await self._aibox_gui_va_cho(payload, expect_type={"alarm_add", "alarm_data"}) or {}
+
+    async def async_alarm_delete(self, alarm_id) -> dict:
+        """Delete an alarm by id."""
+        return await self._aibox_gui_va_cho({"action": "alarm_delete", "id": alarm_id}, expect_type={"alarm_delete", "alarm_data"}) or {}
+
+    async def async_alarm_toggle(self, alarm_id, enabled: bool) -> dict:
+        """Toggle an alarm on/off."""
+        return await self._aibox_gui_va_cho({"action": "alarm_toggle", "id": alarm_id, "enabled": enabled}, expect_type={"alarm_toggle", "alarm_data"}) or {}
+
+    # ── System info ────────────────────────────────────────────────────
+
+    async def async_get_system_info(self) -> dict:
+        """Get system information."""
+        return await self._aibox_gui_va_cho({"action": "system_info"}, expect_type={"system_info", "sys_info"}) or {}
+
+    # ── Voice / TTS ────────────────────────────────────────────────────
+
+    async def async_set_voice(self, voice_id: int) -> dict:
+        """Set the TTS voice."""
+        return await self._aibox_gui_va_cho({"action": "set_voice", "voice_id": voice_id}, expect_type={"set_voice"}) or {}
+
+    async def async_get_voice(self) -> dict:
+        """Get the current TTS voice."""
+        return await self._aibox_gui_va_cho({"action": "get_voice"}, expect_type={"get_voice", "voice_info"}) or {}
+
+    # ── TikTok Reply ───────────────────────────────────────────────────
+
+    async def async_set_tiktok_reply(self, enabled: bool) -> dict:
+        """Enable or disable TikTok reply mode."""
+        return await self._aibox_gui_va_cho({"action": "tiktok_reply", "enabled": enabled}, expect_type={"tiktok_reply"}) or {}
+
+    # ── Live2D ─────────────────────────────────────────────────────────
+
+    async def async_set_live2d(self, model: str) -> dict:
+        """Set Live2D model."""
+        return await self._aibox_gui_va_cho({"action": "live2d_set", "model": model}, expect_type={"live2d_set"}) or {}
+
+    # ── HA Settings ────────────────────────────────────────────────────
+
+    async def async_hass_set(self, url: str = "", agent_id: str = "", api_key: str = "") -> dict:
+        """Set Home Assistant connection settings on device."""
+        payload: dict[str, Any] = {"action": "hass_set"}
+        if url:
+            payload["url"] = url
+        if agent_id:
+            payload["agent_id"] = agent_id
+        if api_key:
+            payload["api_key"] = api_key
+        return await self._aibox_gui_va_cho(payload, expect_type={"hass_set"}) or {}
+
+    async def async_hass_get(self) -> dict:
+        """Get Home Assistant connection settings from device."""
+        return await self._aibox_gui_va_cho({"action": "hass_get"}, expect_type={"hass_get", "hass_info"}) or {}
