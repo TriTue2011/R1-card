@@ -1,12 +1,4 @@
 {
-  "name": "AI BOX WebUI Card",
-  "description": "Full-featured Home Assistant custom card for AI BOX – Media, Control, Chat, EQ, Lighting, Alarms and more.",
-  "content_in_root": true,
-  "render_readme": true,
-  "filename": "aibox-webui-card.js",
-  "country": ["VN"],
-  "homeassistant": "2024.1.0",
-  "hacs": "1.0.0",
-  "filename": "aibox-webui-card.js",
-  "version": "6.0.0"
+  "name": "Phicomm R1",
+  "render_readme": true
 }

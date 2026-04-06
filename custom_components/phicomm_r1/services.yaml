@@ -1,0 +1,755 @@
+send_keycode:
+  name: Send keycode
+  description: Send Android key event to Phicomm R1.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    keycode:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 300
+          mode: box
+
+run_command:
+  name: Run command
+  description: Run shell command on Phicomm R1.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    command:
+      required: true
+      selector:
+        text:
+    type_id:
+      required: false
+      default: myshell
+      selector:
+        text:
+
+send_message:
+  name: Send message
+  description: Send native ws send_message payload.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    what:
+      required: true
+      selector:
+        number:
+          mode: box
+    arg1:
+      required: true
+      selector:
+        number:
+          mode: box
+    arg2:
+      required: false
+      default: -1
+      selector:
+        number:
+          mode: box
+    obj:
+      required: false
+      default: true
+      selector:
+        text:
+    type_id:
+      required: false
+      selector:
+        text:
+
+ws_send_payload:
+  name: WS send payload
+  description: Send custom ws payload (JSON object string).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    payload:
+      required: true
+      example: '{"type":"get_info"}'
+      selector:
+        text:
+    expect_type:
+      required: false
+      selector:
+        text:
+
+search_youtube:
+  name: Search YouTube
+  description: Search songs on YouTube (AiboxPlus WebSocket port, default 8082).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    query:
+      required: true
+      example: Son Tung M-TP
+      selector:
+        text:
+
+search_playlist:
+  name: Search YouTube playlist
+  description: Search playlists on YouTube (AiboxPlus WebSocket port, default 8082).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    query:
+      required: true
+      example: Nhac chill
+      selector:
+        text:
+
+search_zing:
+  name: Search Zing MP3
+  description: Search songs on Zing MP3 (AiboxPlus WebSocket port, default 8082).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    query:
+      required: true
+      example: See Tinh
+      selector:
+        text:
+
+play_youtube:
+  name: Play YouTube by video id
+  description: Play a YouTube item by video id (for example from last_music_search.items).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    video_id:
+      required: true
+      selector:
+        text:
+
+play_zing:
+  name: Play Zing MP3 by song id
+  description: Play a Zing MP3 song by song_id (for example from last_music_search.items).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    song_id:
+      required: true
+      selector:
+        text:
+
+playlist_list:
+  name: Get playlist library
+  description: Load the current AiboxPlus playlist library.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+playlist_create:
+  name: Create playlist
+  description: Create a new AiboxPlus playlist.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    name:
+      required: true
+      example: Nhac buoi sang
+      selector:
+        text:
+
+playlist_delete:
+  name: Delete playlist
+  description: Delete one AiboxPlus playlist by id.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    playlist_id:
+      required: true
+      example: 1
+      selector:
+        number:
+          mode: box
+
+playlist_get_songs:
+  name: Get playlist songs
+  description: Load songs from one AiboxPlus playlist.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    playlist_id:
+      required: true
+      example: 1
+      selector:
+        number:
+          mode: box
+
+playlist_add_song:
+  name: Add song to playlist
+  description: Add one YouTube or Zing track into an AiboxPlus playlist.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    playlist_id:
+      required: true
+      example: 1
+      selector:
+        number:
+          mode: box
+    source:
+      required: true
+      example: youtube
+      selector:
+        text:
+    id:
+      required: true
+      example: dQw4w9WgXcQ
+      selector:
+        text:
+    title:
+      example: Noi nay co anh
+      selector:
+        text:
+    artist:
+      example: Son Tung M-TP Official
+      selector:
+        text:
+    thumbnail_url:
+      example: https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg
+      selector:
+        text:
+    duration_seconds:
+      example: 279
+      selector:
+        number:
+          mode: box
+
+playlist_remove_song:
+  name: Remove song from playlist
+  description: Remove one song from an AiboxPlus playlist by zero-based song index.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    playlist_id:
+      required: true
+      example: 1
+      selector:
+        number:
+          mode: box
+    song_index:
+      required: true
+      example: 0
+      selector:
+        number:
+          mode: box
+
+playlist_play:
+  name: Play playlist
+  description: Start playback for one AiboxPlus playlist by id.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    playlist_id:
+      required: true
+      example: 1
+      selector:
+        number:
+          mode: box
+
+wake_word_set_enabled:
+  name: Wake word set enabled
+  description: Enable or disable wake word detection.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    enabled:
+      required: true
+      selector:
+        boolean:
+
+wake_word_get_enabled:
+  name: Wake word get enabled
+  description: Query wake word enabled state.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+wake_word_set_sensitivity:
+  name: Wake word set sensitivity
+  description: Set wake word sensitivity (0.0 to 1.0).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    sensitivity:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.01
+          mode: slider
+
+wake_word_get_sensitivity:
+  name: Wake word get sensitivity
+  description: Query wake word sensitivity.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+custom_ai_set_enabled:
+  name: Custom AI set enabled
+  description: Enable or disable Custom AI.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    enabled:
+      required: true
+      selector:
+        boolean:
+
+custom_ai_get_enabled:
+  name: Custom AI get enabled
+  description: Query Custom AI enabled state.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+anti_deaf_ai_set_enabled:
+  name: Anti-Deaf AI set enabled
+  description: Alias of Custom AI set enabled.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    enabled:
+      required: true
+      selector:
+        boolean:
+
+anti_deaf_ai_get_enabled:
+  name: Anti-Deaf AI get enabled
+  description: Alias of Custom AI get enabled.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+chat_wake_up:
+  name: Chat wake up
+  description: Trigger chat wake-up action.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+chat_test_mic:
+  name: Chat test mic
+  description: Trigger chat microphone test action.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+chat_get_state:
+  name: Chat get state
+  description: Query chat state.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+chat_send_text:
+  name: Chat send text
+  description: Send text to chat AI.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    text:
+      required: true
+      selector:
+        text:
+
+chat_get_history:
+  name: Chat get history
+  description: Load recent chat messages.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+set_dlna:
+  name: Set DLNA
+  description: Enable or disable DLNA autostart.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    enabled:
+      required: true
+      selector:
+        boolean:
+
+set_airplay:
+  name: Set AirPlay
+  description: Enable or disable AirPlay autostart.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    enabled:
+      required: true
+      selector:
+        boolean:
+
+set_bluetooth:
+  name: Set Bluetooth
+  description: Enable or disable Bluetooth.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    enabled:
+      required: true
+      selector:
+        boolean:
+
+set_main_light:
+  name: Set main light
+  description: Enable or disable ambient main light.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    enabled:
+      required: true
+      selector:
+        boolean:
+
+set_light_mode:
+  name: Set light mode
+  description: Set main light effect mode.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    mode:
+      required: true
+      selector:
+        number:
+          mode: box
+
+set_light_speed:
+  name: Set light speed
+  description: Set light speed (1..100).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    speed:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 100
+          mode: slider
+
+set_light_brightness:
+  name: Set light brightness
+  description: Set light brightness (1..200).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    brightness:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 200
+          mode: slider
+
+set_edge_light:
+  name: Set edge light
+  description: Enable or disable white edge light. Optionally set intensity (0..100).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    enabled:
+      required: true
+      selector:
+        boolean:
+    intensity:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 100
+          mode: slider
+
+set_bass_enable:
+  name: Set bass enable
+  description: Enable or disable bass enhancement.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    enabled:
+      required: true
+      selector:
+        boolean:
+
+set_bass_strength:
+  name: Set bass strength
+  description: Set bass strength.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    strength:
+      required: true
+      selector:
+        number:
+          mode: box
+
+set_loudness_enable:
+  name: Set loudness enable
+  description: Enable or disable loudness.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    enabled:
+      required: true
+      selector:
+        boolean:
+
+set_loudness_gain:
+  name: Set loudness gain
+  description: Set loudness gain.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    gain:
+      required: true
+      selector:
+        number:
+          mode: box
+
+set_eq_enable:
+  name: Set EQ enable
+  description: Enable or disable EQ.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    enabled:
+      required: true
+      selector:
+        boolean:
+
+set_eq_bandlevel:
+  name: Set EQ bandlevel
+  description: Set EQ band level.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    band:
+      required: true
+      selector:
+        number:
+          mode: box
+    level:
+      required: true
+      selector:
+        number:
+          mode: box
+
+set_mixer_value:
+  name: Set mixer value
+  description: Set mixer value (for example DAC Digital Volume L or R).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    control_name:
+      required: true
+      selector:
+        text:
+    value:
+      required: true
+      selector:
+        number:
+          mode: box
+
+set_play_mode:
+  name: Set play mode
+  description: Set play mode (for example 1 shuffle, 2 repeat).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    mode:
+      required: true
+      selector:
+        number:
+          mode: box
+
+reboot:
+  name: Reboot speaker
+  description: Reboot Phicomm R1.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+seek:
+  name: Seek
+  description: Seek to a position in current playback (seconds).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    position:
+      required: true
+      selector:
+        number:
+          min: 0
+          mode: box
+
+toggle_repeat:
+  name: Toggle repeat
+  description: Toggle repeat mode on/off.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+toggle_auto_next:
+  name: Toggle auto-next
+  description: Toggle auto-next song on/off.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+led_toggle:
+  name: Toggle LED
+  description: Toggle LED indicator on/off.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+led_get_state:
+  name: Get LED state
+  description: Query current LED state.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+stereo_enable:
+  name: Enable stereo
+  description: Enable stereo pairing mode.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+stereo_disable:
+  name: Disable stereo
+  description: Disable stereo pairing mode.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+stereo_set_channel:
+  name: Set stereo channel
+  description: Set stereo channel (left or right).
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+  fields:
+    channel:
+      required: true
+      selector:
+        select:
+          options:
+            - left
+            - right
+
+stereo_get_state:
+  name: Get stereo state
+  description: Query current stereo pairing state.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player
+
+refresh_state:
+  name: Refresh state
+  description: Force refresh entity state from device immediately.
+  target:
+    entity:
+      integration: phicomm_r1
+      domain: media_player

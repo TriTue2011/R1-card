@@ -1,0 +1,70 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Thiết lập Phicomm R1",
+        "description": "Kết nối Home Assistant với Phicomm R1 (cầu nối HTTP hoặc WebSocket gốc).",
+        "data": {
+          "name": "Tên",
+          "host": "Địa chỉ IP hoặc host",
+          "port": "Cổng",
+          "aibox_ws_port": "Cổng WebSocket media (YouTube/Zing)",
+          "scan_interval": "Chu kỳ cập nhật (giây)",
+          "use_media_dispatch": "Dùng /media-dispatch để điều khiển phát",
+          "protocol": "Chế độ giao thức (auto/http_bridge/ws_native)",
+          "endpoint_do_cmd": "Đường dẫn cho lệnh shell",
+          "endpoint_adb_cmd": "Đường dẫn cho lệnh ADB",
+          "endpoint_keyevent": "Đường dẫn cho sự kiện phím",
+          "endpoint_media_dispatch": "Đường dẫn cho media dispatch",
+          "param_command": "Tên tham số query của lệnh",
+          "param_keycode": "Tên tham số query của mã phím",
+          "param_media_key": "Tên tham số query của thao tác media",
+          "response_code_key": "Tên trường mã trạng thái trong phản hồi",
+          "response_message_key": "Tên trường thông báo trong phản hồi",
+          "response_result_key": "Tên trường kết quả trong phản hồi",
+          "response_success_code": "Giá trị mã thành công"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Không thể kết nối",
+      "invalid_response": "API trả về dữ liệu không hợp lệ",
+      "unknown": "Lỗi không xác định"
+    },
+    "abort": {
+      "already_configured": "Thiết bị này đã được cấu hình"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Tùy chọn Phicomm R1",
+        "data": {
+          "name": "Tên",
+          "host": "Địa chỉ IP hoặc host",
+          "port": "Cổng",
+          "aibox_ws_port": "Cổng WebSocket media (YouTube/Zing)",
+          "scan_interval": "Chu kỳ cập nhật (giây)",
+          "use_media_dispatch": "Dùng /media-dispatch để điều khiển phát",
+          "protocol": "Chế độ giao thức (auto/http_bridge/ws_native)",
+          "endpoint_do_cmd": "Đường dẫn cho lệnh shell",
+          "endpoint_adb_cmd": "Đường dẫn cho lệnh ADB",
+          "endpoint_keyevent": "Đường dẫn cho sự kiện phím",
+          "endpoint_media_dispatch": "Đường dẫn cho media dispatch",
+          "param_command": "Tên tham số query của lệnh",
+          "param_keycode": "Tên tham số query của mã phím",
+          "param_media_key": "Tên tham số query của thao tác media",
+          "response_code_key": "Tên trường mã trạng thái trong phản hồi",
+          "response_message_key": "Tên trường thông báo trong phản hồi",
+          "response_result_key": "Tên trường kết quả trong phản hồi",
+          "response_success_code": "Giá trị mã thành công"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Không thể kết nối",
+      "invalid_response": "API trả về dữ liệu không hợp lệ",
+      "unknown": "Lỗi không xác định"
+    }
+  }
+}
