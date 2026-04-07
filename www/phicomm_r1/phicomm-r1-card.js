@@ -143,6 +143,40 @@ class PhicommR1Card extends HTMLElement {
     this._wifiPasswordDialog = false;
     this._wifiPasswordSsid = "";
     this._wifiPasswordInput = "";
+
+    // --- Direct WebSocket connections ---
+    this._mainWs = null;
+    this._mainWsConnected = false;
+    this._spkWs = null;
+    this._spkHb = null;
+    this._spkEqHb = null;
+    this._spkReconnect = null;
+    this._mainReconnect = null;
+    this._deviceHost = "";
+    this._deviceSpkPort = 8080;
+    this._deviceAiboxPort = 8082;
+    this._wsGuardCtrl = 0;
+    this._wsGuardAudio = 0;
+    this._wsVolDragging = false;
+    this._wsVolGuardUntil = 0;
+    this._wsDropCount = 0;
+
+    // --- Multi-Room / Sync ---
+    this._rooms = null;
+    this._currentRoomIdx = 0;
+    this._syncRoomIdxs = new Set();
+    this._multiWs = {};
+    this._roomVolumes = {};
+    this._roomPlayback = {};
+    this._autoSync = false;
+    this._autoSyncTimer = null;
+    this._autoSyncDoneForSong = false;
+    this._lastSyncSongTitle = "";
+    this._syncInProgress = false;
+    this._syncSuppressUntil = 0;
+    this._syncGen = 0;
+    this._syncSettingsOpen = false;
+    this._switching = false;
   }
 
   static getStubConfig() {
@@ -174,9 +208,44 @@ class PhicommR1Card extends HTMLElement {
     const maxHeight = this._chuanHoaKichThuocCss(config.max_height ?? config.maxHeight);
     this._config = {
       title: "Phicomm R1",
+      sync_send_song: true,
+      auto_sync_delay_ms: 5000,
+      sync_pause_ms: 400,
+      sync_resume_delay_ms: 3000,
       ...config,
       max_height: maxHeight,
     };
+
+    // Parse rooms config
+    this._rooms = Array.isArray(this._config.rooms) && this._config.rooms.length
+      ? this._config.rooms.map((r, i) => ({
+          name: r.name || `Loa ${i + 1}`,
+          entity: (r.entity || "").trim(),
+          host: (r.host || "").trim(),
+        }))
+      : null;
+    if (this._rooms) {
+      if (this._currentRoomIdx === undefined || this._currentRoomIdx >= this._rooms.length) {
+        const saved = this._lsGet("roomIdx");
+        this._currentRoomIdx = (saved !== null && saved >= 0 && saved < this._rooms.length) ? saved : 0;
+      }
+      // Restore saved sync targets
+      this._syncRoomIdxs = new Set();
+      const savedSync = this._lsGet("syncIdxs");
+      if (Array.isArray(savedSync)) {
+        savedSync.forEach(i => {
+          if (typeof i === "number" && i >= 0 && i < this._rooms.length && i !== this._currentRoomIdx)
+            this._syncRoomIdxs.add(i);
+        });
+      }
+      const savedAuto = this._lsGet("autoSync");
+      if (savedAuto) this._autoSync = true;
+      // Apply current room's entity
+      if (this._rooms[this._currentRoomIdx]?.entity) {
+        this._config.entity = this._rooms[this._currentRoomIdx].entity;
+      }
+    }
+
     this._lastEntityRef = null;
     this._pendingRender = false;
     this._xoaHenGioTienDo();
@@ -221,6 +290,11 @@ class PhicommR1Card extends HTMLElement {
     this._hass = hass;
     if (!this._config) return;
 
+    // Apply current room's entity
+    if (this._rooms && this._rooms[this._currentRoomIdx]?.entity) {
+      this._config.entity = this._rooms[this._currentRoomIdx].entity;
+    }
+
     const entityRef = this._doiTuongTrangThai();
     const changed = entityRef !== this._lastEntityRef;
     const currentSearchStateKey = this._khoaTrangThaiTimKiem(
@@ -248,6 +322,11 @@ class PhicommR1Card extends HTMLElement {
     this._lastPlaylistDetailKey = currentPlaylistDetailKey;
     this._lastPlaylistEventKey = currentPlaylistEventKey;
     this._dongBoTuEntity();
+
+    // Establish direct WebSocket connections if we have device info
+    if (!this._mainWsConnected && this._thuocTinh()._device_host) {
+      this._wsKhoiTaoKetNoi();
+    }
 
     if (
       !changed &&
@@ -311,6 +390,12 @@ class PhicommR1Card extends HTMLElement {
 
   disconnectedCallback() {
     this._xoaHenGioTienDo();
+    this._disconnectAllMulti();
+    clearTimeout(this._autoSyncTimer);
+    this._stopSpkHeartbeat();
+    if (this._mainWs) { try { this._mainWs.close(); } catch {} this._mainWs = null; }
+    if (this._spkWs) { try { this._spkWs.close(); } catch {} this._spkWs = null; }
+    this._mainWsConnected = false;
   }
 
   _doiTuongTrangThai() {
@@ -321,6 +406,10 @@ class PhicommR1Card extends HTMLElement {
   _thuocTinh() {
     return this._doiTuongTrangThai()?.attributes || {};
   }
+
+  _lsKey(k) { return `phicomm_r1_${(this._config?.title || "card").replace(/\W+/g, "_")}_${k}`; }
+  _lsGet(k) { try { const v = localStorage.getItem(this._lsKey(k)); return v !== null ? JSON.parse(v) : null; } catch { return null; } }
+  _lsSet(k, v) { try { localStorage.setItem(this._lsKey(k), JSON.stringify(v)); } catch {} }
 
   _taoTrangThaiDialogPlaylist() {
     return {
@@ -5324,6 +5413,51 @@ class PhicommR1Card extends HTMLElement {
         }
         .wifi-item:last-child { border-bottom: none; }
         .wifi-item span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        /* ── Room pills ── */
+        .room-bar { display: flex; gap: 5px; overflow-x: auto; padding: 4px 12px 8px; scrollbar-width: none; align-items: flex-end; }
+        .room-bar::-webkit-scrollbar { display: none; }
+        .room-pill-group { display: flex; flex-direction: column; align-items: center; gap: 3px; flex-shrink: 0; }
+        .room-pill { display: flex; align-items: center; gap: 5px; padding: 6px 12px; border-radius: 999px; cursor: pointer; font-size: 11px; font-weight: 700; white-space: nowrap; border: 1px solid rgba(148,163,184,.18); background: rgba(2,6,23,.4); color: rgba(226,232,240,.6); transition: all .18s; }
+        .room-pill:hover { background: rgba(122,99,255,.2); border-color: rgba(122,99,255,.25); color: #c4b5fd; }
+        .room-pill.active { background: linear-gradient(135deg, rgba(122,99,255,.45), rgba(79,141,255,.3)); border-color: rgba(122,99,255,.5); color: #fff; box-shadow: 0 2px 14px rgba(122,99,255,.3); }
+        .room-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: rgba(148,163,184,.4); transition: all .2s; flex-shrink: 0; }
+        .sync-active-mark { font-size: 10px; line-height: 1; }
+        .sync-cb-label { display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all .15s; user-select: none; }
+        .sync-cb-label input[type=checkbox] { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
+        .sync-cb-icon { font-size: 13px; line-height: 1; transition: transform .15s; }
+        .sync-cb-label:hover .sync-cb-icon { transform: scale(1.2); }
+        .sync-cb-label.synced .sync-cb-icon { filter: drop-shadow(0 0 4px rgba(34,197,94,.6)); }
+
+        /* ── Sync bar ── */
+        .sync-bar { border-radius: 12px; background: linear-gradient(135deg, rgba(6,9,18,.7), rgba(2,6,23,.8)); border: 1px solid rgba(122,99,255,.2); padding: 8px 12px; margin-bottom: 8px; }
+        .sync-bar-inner { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+        .sync-bar-left { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 0; }
+        .sync-bar-label { font-size: 10px; font-weight: 900; color: var(--accent); letter-spacing: 1px; flex-shrink: 0; }
+        .sync-room-badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+        .sync-room-badge.ok { background: rgba(34,197,94,.15); border: 1px solid rgba(34,197,94,.35); color: #86efac; }
+        .sync-room-badge.pending { background: rgba(234,179,8,.1); border: 1px solid rgba(234,179,8,.25); color: #fbbf24; animation: syncPending 1.5s ease-in-out infinite; }
+        @keyframes syncPending { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
+        .sync-bar-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+        .sync-btn { padding: 5px 10px; border-radius: 8px; cursor: pointer; font-size: 10px; font-weight: 700; border: 1px solid rgba(122,99,255,.3); background: rgba(122,99,255,.25); color: #c4b5fd; transition: all .15s; white-space: nowrap; }
+        .sync-btn:hover { background: rgba(122,99,255,.5); border-color: rgba(122,99,255,.5); }
+        .sync-auto-on { background: linear-gradient(135deg, rgba(34,197,94,.3), rgba(21,128,61,.25)); border-color: rgba(34,197,94,.4); color: #86efac; animation: autoSyncPulse 2s ease-in-out infinite; }
+        @keyframes autoSyncPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(34,197,94,.3); } 50% { box-shadow: 0 0 8px 3px rgba(34,197,94,.2); } }
+        .sync-btn-busy { opacity: .6; cursor: not-allowed; animation: syncBusy .8s ease-in-out infinite; }
+        @keyframes syncBusy { 0%,100% { opacity: .6; } 50% { opacity: .3; } }
+        .hidden { display: none !important; }
+
+        /* ── Room volumes ── */
+        .room-volumes { border-radius: 12px; background: rgba(2,6,23,.5); border: 1px solid rgba(122,99,255,.15); padding: 8px 12px; margin-bottom: 8px; }
+        .room-vol-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+        .room-vol-row:last-child { margin-bottom: 0; }
+        .room-vol-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+        .room-vol-name { font-size: 10px; font-weight: 700; min-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .room-vol-slider { flex: 1; height: 4px; -webkit-appearance: none; appearance: none; background: rgba(148,163,184,.15); border-radius: 999px; outline: none; }
+        .room-vol-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--rv-color, var(--accent)); cursor: pointer; }
+        .room-vol-label { font-size: 10px; color: var(--muted); min-width: 16px; text-align: right; }
+        .sync-slider { flex: 1; height: 3px; -webkit-appearance: none; appearance: none; background: rgba(148,163,184,.15); border-radius: 999px; outline: none; }
+        .sync-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); cursor: pointer; }
       </style>
 
       <ha-card>
@@ -5340,12 +5474,38 @@ class PhicommR1Card extends HTMLElement {
               )
               .join("")}
           </div>
+          ${this._rooms && this._rooms.length > 1 ? `
+          <div class="room-bar" id="roomBar">
+            ${this._rooms.map((r, i) => {
+              const isActive = i === this._currentRoomIdx;
+              const isSynced = this._syncRoomIdxs.has(i);
+              const color = ROOM_COLORS[i % ROOM_COLORS.length];
+              return `<div class="room-pill-group">
+                <button class="room-pill ${isActive ? "active" : ""}" data-ridx="${i}" style="${isActive ? `--pill-color:${color}` : ""}">
+                  <span class="room-pill-dot" style="${isActive ? `background:${color};box-shadow:0 0 6px ${color}60` : ""}"></span>
+                  <span>${this._maHoaHtml(r.name)}</span>
+                </button>
+                ${!isActive ? `<label class="sync-cb-label${isSynced ? " synced" : ""}">
+                  <input type="checkbox" class="sync-cb" data-sidx="${i}"${isSynced ? " checked" : ""} />
+                  <span class="sync-cb-icon">${isSynced ? "🔗" : "⭕"}</span>
+                </label>` : `<span class="sync-active-mark" style="color:${color}">★</span>`}
+              </div>`;
+            }).join("")}
+          </div>` : ""}
           <div class="card-body">
+            ${this._activeTab === "media" && this._rooms && this._rooms.length > 1 ? `
+              <div class="sync-bar" id="syncBar" style="display:none"></div>
+              <div class="room-volumes" id="roomVolumes" style="display:none"></div>
+            ` : ""}
             ${body}
           </div>
         </div>
       </ha-card>
     `;
+
+    if (this._activeTab === "media" && this._rooms && this._rooms.length > 1) {
+      setTimeout(() => { this._renderSyncBar(); this._renderRoomVolumeSliders(); }, 0);
+    }
 
     if (this._activeTab === "chat") {
       this._damBaoTrangThaiChat();
@@ -5413,11 +5573,15 @@ class PhicommR1Card extends HTMLElement {
     this._lastControlStateRequestAt = now;
     try {
       await this._lamMoiEntity(180);
-      await this._goiDichVu("phicomm_r1", "wake_word_get_enabled");
-      await this._goiDichVu("phicomm_r1", "wake_word_get_sensitivity");
-      await this._goiDichVu("phicomm_r1", "custom_ai_get_enabled");
-      this._goiDichVu("phicomm_r1", "get_voice").catch(() => {});
-      this._goiDichVu("phicomm_r1", "alarm_list").catch(() => {});
+      // Use direct WS for faster control state
+      this._sendWs({ action: "wake_word_get_enabled" });
+      this._sendWs({ action: "wake_word_get_sensitivity" });
+      this._sendWs({ action: "custom_ai_get_enabled" });
+      this._sendWs({ action: "voice_id_get" });
+      this._sendWs({ action: "live2d_get_model" });
+      this._sendWs({ action: "alarm_list" });
+      this._sendWs({ action: "led_get_state" });
+      await this._goiDichVu("phicomm_r1", "wake_word_get_enabled").catch(() => {});
       await this._lamMoiEntity(220);
     } catch (err) {
       console.warn("control bootstrap refresh failed", err);
@@ -5429,20 +5593,820 @@ class PhicommR1Card extends HTMLElement {
     if (now - this._lastSystemStateRequestAt < 7000) return;
     this._lastSystemStateRequestAt = now;
     try {
-      await this._goiDichVu("phicomm_r1", "refresh_state");
-      this._goiDichVu("phicomm_r1", "get_system_info").catch(() => {});
-      this._goiDichVu("phicomm_r1", "mac_get").catch(() => {});
-      this._goiDichVu("phicomm_r1", "ota_get").catch(() => {});
-      this._goiDichVu("phicomm_r1", "hass_get").catch(() => {});
+      // Use direct WS for fast system info
+      this._sendWs({ action: "mac_get" });
+      this._sendWs({ action: "ota_get" });
+      this._sendWs({ action: "hass_get" });
+      this._sendWs({ action: "wifi_get_status" });
+      if (this._spkWs?.readyState === 1) {
+        this._spkWs.send(JSON.stringify({ type: "get_device_info" }));
+      }
+      await this._goiDichVu("phicomm_r1", "refresh_state").catch(() => {});
       await this._lamMoiEntity(250, 2);
     } catch (err) {
       console.warn("system bootstrap refresh failed", err);
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // MULTI-ROOM / SYNC
+  // ═══════════════════════════════════════════════════════════════
+
+  _getRoomHost(idx) {
+    const room = this._rooms?.[idx];
+    if (!room) return null;
+    if (room.host) return { host: room.host, aiboxPort: 8082, spkPort: 8080 };
+    if (room.entity && this._hass) {
+      const st = this._hass.states[room.entity];
+      const a = st?.attributes || {};
+      const host = a._device_host;
+      if (!host) return null;
+      let spkPort = 8080, aiboxPort = 8082;
+      if (a._device_ws_url) { const m = a._device_ws_url.match(/:(\d+)$/); if (m) spkPort = Number(m[1]); }
+      if (a._device_aibox_ws_url) { const m = a._device_aibox_ws_url.match(/:(\d+)$/); if (m) aiboxPort = Number(m[1]); }
+      return { host, aiboxPort, spkPort };
+    }
+    return null;
+  }
+
+  _switchRoom(idx) {
+    if (!this._rooms || idx === this._currentRoomIdx) return;
+    this._switching = true;
+    this._disconnectAllMulti();
+    clearTimeout(this._autoSyncTimer); this._autoSyncTimer = null;
+
+    // Close current WS connections
+    if (this._mainWs) { try { this._mainWs.onclose = null; this._mainWs.close(); } catch {} this._mainWs = null; }
+    if (this._spkWs) { try { this._spkWs.onclose = null; this._spkWs.close(); } catch {} this._spkWs = null; }
+    this._stopSpkHeartbeat();
+    this._mainWsConnected = false;
+
+    this._currentRoomIdx = idx;
+    this._lsSet("roomIdx", idx);
+
+    // Apply new room's entity or host
+    const room = this._rooms[idx];
+    if (room.entity) {
+      this._config.entity = room.entity;
+      this._lastEntityRef = null;
+    }
+    const info = this._getRoomHost(idx);
+    if (info) {
+      this._deviceHost = info.host;
+      this._deviceSpkPort = info.spkPort;
+      this._deviceAiboxPort = info.aiboxPort;
+      this._connectMainWs();
+      this._connectSpkWs();
+    }
+
+    this._syncGen++;
+    this._syncInProgress = false;
+    this._switching = false;
+
+    // Reconnect synced rooms
+    setTimeout(() => {
+      this._syncRoomIdxs.forEach(sidx => {
+        if (sidx !== this._currentRoomIdx) this._connectMultiRoom(sidx);
+      });
+    }, 500);
+
+    this._veGiaoDien();
+  }
+
+  _connectMultiRoom(idx) {
+    if (!this._rooms || idx === this._currentRoomIdx) return;
+    const existing = this._multiWs[idx];
+    if (existing) {
+      if (existing.ws?.readyState === 0 || existing.ws?.readyState === 1) return;
+      this._disconnectMultiRoom(idx);
+    }
+    const info = this._getRoomHost(idx);
+    if (!info) return;
+    const entry = { ws: null, spkWs: null, reconnectTimer: null, connected: false, pollTimer: null };
+    this._multiWs[idx] = entry;
+
+    // AiboxPlus WS (port 8082)
+    try {
+      const ws = new WebSocket(`ws://${info.host}:${info.aiboxPort}`);
+      entry.ws = ws;
+      ws.onopen = () => {
+        entry.connected = true;
+        entry.pollTimer = setInterval(() => {
+          if (ws.readyState === 1) ws.send(JSON.stringify({ action: "get_info" }));
+        }, 5000);
+        ws.send(JSON.stringify({ action: "get_info" }));
+        // Sync volume
+        setTimeout(() => {
+          if (ws.readyState === 1) this._sendVolumeToRoom(idx, Math.round(this._volumeLevel * 15));
+        }, 500);
+        delete this._roomVolumes[idx];
+        this._renderSyncBar();
+        this._renderRoomVolumeSliders();
+      };
+      ws.onmessage = (ev) => {
+        try {
+          const d = JSON.parse(ev.data);
+          const vol = (() => {
+            if (d.type === "volume_state" && d.volume !== undefined) return Number(d.volume);
+            if (d.type === "get_info" && d.data) { const v = d.data.vol ?? d.data.volume; if (v !== undefined) return Number(v); }
+            if (d.type === "playback_state" && d.volume !== undefined) return Number(d.volume);
+            if (d.vol !== undefined) return Number(d.vol);
+            return null;
+          })();
+          if (vol !== null && vol !== this._roomVolumes[idx]) {
+            if (this[`_rvGuardUntil_${idx}`] && Date.now() < this[`_rvGuardUntil_${idx}`]) return;
+            this._roomVolumes[idx] = vol;
+            const sl = this.shadowRoot?.querySelector(`.room-vol-slider[data-rvidx="${idx}"]`);
+            if (sl) { sl.value = vol; const lbl = this.shadowRoot?.querySelector(`#rvl_${idx}`); if (lbl) lbl.textContent = vol; }
+          }
+          if (d.type === "playback_state" && d.title) {
+            this._roomPlayback[idx] = { title: d.title || "", artist: d.artist || d.channel || "", isPlaying: !!d.is_playing, source: d.source || "" };
+            const badge = this.shadowRoot?.querySelector(`.sync-room-badge[data-srbidx="${idx}"]`);
+            if (badge && d.title) badge.title = d.title;
+          }
+        } catch {}
+      };
+      ws.onclose = () => {
+        entry.connected = false;
+        if (entry.pollTimer) { clearInterval(entry.pollTimer); entry.pollTimer = null; }
+        this._renderSyncBar();
+        this._renderRoomVolumeSliders();
+        if (this._syncRoomIdxs.has(idx) && !this._switching) {
+          entry.reconnectTimer = setTimeout(() => { delete this._multiWs[idx]; if (this._syncRoomIdxs.has(idx)) this._connectMultiRoom(idx); }, 3000 + Math.random() * 3000);
+        }
+      };
+      ws.onerror = () => {};
+    } catch {}
+
+    // Speaker WS (port 8080)
+    try {
+      const spkWs = new WebSocket(`ws://${info.host}:${info.spkPort}`);
+      entry.spkWs = spkWs;
+      spkWs.onopen = () => { if (spkWs.readyState === 1) spkWs.send(JSON.stringify({ type: "get_info" })); };
+      spkWs.onmessage = (ev) => {
+        try {
+          const d = JSON.parse(ev.data);
+          let s = d;
+          if (typeof d.data === "string") { try { s = JSON.parse(d.data); } catch { s = d; } }
+          else if (d.data) s = d.data;
+          const vol = s.vol !== undefined ? Number(s.vol) : null;
+          if (vol !== null && vol !== this._roomVolumes[idx]) {
+            if (this[`_rvGuardUntil_${idx}`] && Date.now() < this[`_rvGuardUntil_${idx}`]) return;
+            this._roomVolumes[idx] = vol;
+            const sl = this.shadowRoot?.querySelector(`.room-vol-slider[data-rvidx="${idx}"]`);
+            if (sl) { sl.value = vol; const lbl = this.shadowRoot?.querySelector(`#rvl_${idx}`); if (lbl) lbl.textContent = vol; }
+          }
+        } catch {}
+      };
+      spkWs.onclose = () => {
+        if (entry.spkWs === spkWs) entry.spkWs = null;
+        if (this._syncRoomIdxs.has(idx) && !this._switching) {
+          setTimeout(() => {
+            if (!this._syncRoomIdxs.has(idx) || this._switching) return;
+            const ri = this._getRoomHost(idx); if (!ri) return;
+            try { const nw = new WebSocket(`ws://${ri.host}:${ri.spkPort}`); entry.spkWs = nw; nw.onopen = () => { nw.send(JSON.stringify({ type: "get_info" })); }; nw.onmessage = spkWs.onmessage; nw.onclose = spkWs.onclose; nw.onerror = () => {}; } catch {}
+          }, 3500 + Math.random() * 2500);
+        }
+      };
+      spkWs.onerror = () => {};
+    } catch {}
+    this._renderSyncBar();
+    this._renderRoomVolumeSliders();
+  }
+
+  _disconnectMultiRoom(idx) {
+    const entry = this._multiWs[idx]; if (!entry) return;
+    clearTimeout(entry.reconnectTimer);
+    if (entry.pollTimer) { clearInterval(entry.pollTimer); entry.pollTimer = null; }
+    try { if (entry.ws) { entry.ws.onclose = null; entry.ws.onerror = null; entry.ws.onmessage = null; entry.ws.close(); } } catch {}
+    try { if (entry.spkWs) { entry.spkWs.onclose = null; entry.spkWs.onerror = null; entry.spkWs.close(); } } catch {}
+    delete this._multiWs[idx];
+  }
+
+  _disconnectAllMulti() {
+    Object.keys(this._multiWs).forEach(idx => this._disconnectMultiRoom(parseInt(idx)));
+  }
+
+  _getSyncTargets() {
+    if (!this._rooms) return [];
+    return Array.from(this._syncRoomIdxs).filter(i => i !== this._currentRoomIdx);
+  }
+
+  _sendToRoom(idx, obj) {
+    const entry = this._multiWs[idx];
+    if (entry?.ws?.readyState === 1) entry.ws.send(JSON.stringify(obj));
+  }
+
+  _sendSpkToRoom(idx, obj) {
+    const entry = this._multiWs[idx];
+    if (entry?.spkWs?.readyState === 1) entry.spkWs.send(JSON.stringify(obj));
+    else this._sendToRoom(idx, obj);
+  }
+
+  _broadcastCmd(obj) {
+    this._sendWs(obj);
+    const targets = this._getSyncTargets();
+    const a = obj?.action;
+    if (a === "play_song" || a === "play_zing" || a === "play_url" || a === "playlist_play") {
+      targets.forEach((idx, i) => { setTimeout(() => { if (!this._switching) this._sendToRoom(idx, obj); }, i * 300); });
+    } else {
+      targets.forEach(idx => this._sendToRoom(idx, obj));
+    }
+  }
+
+  _broadcastSpkCmd(obj) {
+    this._sendSpkWs(obj);
+    this._getSyncTargets().forEach(idx => this._sendSpkToRoom(idx, obj));
+  }
+
+  _sendVolumeToRoom(idx, vol) {
+    if (idx === this._currentRoomIdx) return;
+    const entry = this._multiWs[idx]; if (!entry) return;
+    if (entry.spkWs?.readyState === 1) {
+      entry.spkWs.send(JSON.stringify({ type: "set_vol", vol }));
+      entry.spkWs.send(JSON.stringify({ type: "send_message", what: 4, arg1: 5, arg2: vol }));
+    }
+    if (entry.ws?.readyState === 1) {
+      entry.ws.send(JSON.stringify({ action: "set_volume", value: vol }));
+      entry.ws.send(JSON.stringify({ type: "set_vol", vol }));
+    }
+  }
+
+  // ── Sync Playback ──
+
+  _syncPlaybackTime(silent = false) {
+    const targets = this._getSyncTargets();
+    if (!targets.length) return;
+    if (this._syncInProgress) return;
+    this._syncInProgress = true;
+    const PAUSE_SETTLE = this._config.sync_pause_ms || 400;
+    const RESUME_DELAY = this._config.sync_resume_delay_ms || 3000;
+    const pos = this._livePositionSeconds || 0;
+    const wasPlaying = this._livePlaying;
+    const roomNames = targets.map(i => this._rooms[i].name).join(", ");
+    const gen = ++this._syncGen;
+    const aborted = () => gen !== this._syncGen || this._switching;
+
+    // Pause all
+    this._broadcastCmd({ action: "pause" });
+    this._broadcastSpkCmd({ type: "send_message", what: 65536, arg1: 0, arg2: 0, obj: "pause" });
+
+    setTimeout(() => {
+      if (aborted()) { this._syncInProgress = false; return; }
+      // Seek all
+      this._sendWs({ action: "seek", position: pos });
+      targets.forEach(idx => this._sendToRoom(idx, { action: "seek", position: pos }));
+
+      setTimeout(() => {
+        if (aborted()) { this._syncInProgress = false; return; }
+        if (wasPlaying) {
+          this._syncSuppressUntil = Date.now() + 8000;
+          this._broadcastCmd({ action: "resume" });
+        }
+        this._syncInProgress = false;
+        this._renderSyncBar();
+      }, RESUME_DELAY);
+    }, PAUSE_SETTLE);
+  }
+
+  _scheduleAutoSync() {
+    if (!this._autoSync) return;
+    if (!this._getSyncTargets().length) return;
+    if (Date.now() < this._syncSuppressUntil) return;
+    const playback = this._thongTinPhat();
+    const songTitle = playback?.title || "";
+    if (this._autoSyncDoneForSong && this._lastSyncSongTitle === songTitle) return;
+    clearTimeout(this._autoSyncTimer);
+    this._autoSyncTimer = setTimeout(() => {
+      if (this._livePlaying && this._getSyncTargets().length && !this._syncInProgress) {
+        const currentTitle = this._thongTinPhat()?.title || "";
+        if (this._autoSyncDoneForSong && this._lastSyncSongTitle === currentTitle) return;
+        this._autoSyncDoneForSong = true;
+        this._lastSyncSongTitle = currentTitle;
+        this._syncPlaybackTime(true);
+      }
+    }, this._config.auto_sync_delay_ms || 5000);
+  }
+
+  _toggleAutoSync() {
+    this._autoSync = !this._autoSync;
+    this._lsSet("autoSync", this._autoSync);
+    clearTimeout(this._autoSyncTimer); this._autoSyncTimer = null;
+    if (this._autoSync && this._livePlaying) this._scheduleAutoSync();
+    if (!this._autoSync) this._autoSyncDoneForSong = false;
+    this._renderSyncBar();
+  }
+
+  _renderSyncBar() {
+    const bar = this.shadowRoot?.querySelector("#syncBar"); if (!bar) return;
+    const targets = this._getSyncTargets();
+    if (!this._rooms || this._rooms.length < 2 || targets.length === 0) { bar.style.display = "none"; return; }
+    bar.style.display = "";
+    bar.innerHTML = `
+      <div class="sync-bar-inner">
+        <div class="sync-bar-left">
+          <span class="sync-bar-label">SYNC</span>
+          ${targets.map(idx => {
+            const ok = this._multiWs[idx]?.connected;
+            const rp = this._roomPlayback[idx];
+            return `<span class="sync-room-badge ${ok ? "ok" : "pending"}" data-srbidx="${idx}" title="${this._maHoaHtml(rp?.title || "")}">
+              ${this._maHoaHtml(this._rooms[idx].name)}${rp?.isPlaying ? " ▶" : ""}
+            </span>`;
+          }).join("")}
+        </div>
+        <div class="sync-bar-right">
+          <button class="sync-btn${this._syncInProgress ? " sync-btn-busy" : ""}" id="btnSyncNow" ${this._syncInProgress ? "disabled" : ""}>
+            ${this._syncInProgress ? "Syncing..." : "Sync Now"}
+          </button>
+          <button class="sync-btn ${this._autoSync ? "sync-auto-on" : ""}" id="btnAutoSync">
+            ${this._autoSync ? "Auto ON" : "Auto"}
+          </button>
+          <button class="sync-btn" id="btnSyncSettings">⚙</button>
+        </div>
+      </div>
+      <div id="syncSettingsPanel" class="${this._syncSettingsOpen ? "" : "hidden"}" style="border-top:1px solid rgba(122,99,255,.15);margin-top:6px;padding-top:8px">
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <div style="flex:1;min-width:90px">
+            <div style="font-size:9px;color:var(--muted);margin-bottom:3px">Chờ trước auto-sync</div>
+            <div style="display:flex;align-items:center;gap:4px">
+              <input type="range" class="sync-slider" id="slAutoDelay" min="1000" max="15000" step="500" value="${this._config.auto_sync_delay_ms}" style="flex:1" />
+              <span id="autoDelayVal" style="font-size:10px;color:var(--accent);min-width:32px;text-align:right">${((this._config.auto_sync_delay_ms || 5000) / 1000).toFixed(1)}s</span>
+            </div>
+          </div>
+          <div style="flex:1;min-width:90px">
+            <div style="font-size:9px;color:var(--muted);margin-bottom:3px">Pause settle</div>
+            <div style="display:flex;align-items:center;gap:4px">
+              <input type="range" class="sync-slider" id="slPauseMs" min="100" max="2000" step="50" value="${this._config.sync_pause_ms}" style="flex:1" />
+              <span id="pauseMsVal" style="font-size:10px;color:var(--accent);min-width:32px;text-align:right">${this._config.sync_pause_ms || 400}ms</span>
+            </div>
+          </div>
+          <div style="flex:1;min-width:90px">
+            <div style="font-size:9px;color:var(--muted);margin-bottom:3px">Resume delay</div>
+            <div style="display:flex;align-items:center;gap:4px">
+              <input type="range" class="sync-slider" id="slResumeDelay" min="500" max="8000" step="250" value="${this._config.sync_resume_delay_ms}" style="flex:1" />
+              <span id="resumeDelayVal" style="font-size:10px;color:var(--accent);min-width:32px;text-align:right">${((this._config.sync_resume_delay_ms || 3000) / 1000).toFixed(1)}s</span>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    const syncNow = bar.querySelector("#btnSyncNow");
+    if (syncNow) syncNow.onclick = () => this._syncPlaybackTime(false);
+    const autoBtn = bar.querySelector("#btnAutoSync");
+    if (autoBtn) autoBtn.onclick = () => this._toggleAutoSync();
+    const settingsBtn = bar.querySelector("#btnSyncSettings");
+    if (settingsBtn) settingsBtn.onclick = () => { this._syncSettingsOpen = !this._syncSettingsOpen; this._renderSyncBar(); };
+    const slAutoDelay = bar.querySelector("#slAutoDelay");
+    if (slAutoDelay) slAutoDelay.oninput = () => { this._config.auto_sync_delay_ms = parseInt(slAutoDelay.value); const v = bar.querySelector("#autoDelayVal"); if (v) v.textContent = (this._config.auto_sync_delay_ms / 1000).toFixed(1) + "s"; };
+    const slPauseMs = bar.querySelector("#slPauseMs");
+    if (slPauseMs) slPauseMs.oninput = () => { this._config.sync_pause_ms = parseInt(slPauseMs.value); const v = bar.querySelector("#pauseMsVal"); if (v) v.textContent = this._config.sync_pause_ms + "ms"; };
+    const slResumeDelay = bar.querySelector("#slResumeDelay");
+    if (slResumeDelay) slResumeDelay.oninput = () => { this._config.sync_resume_delay_ms = parseInt(slResumeDelay.value); const v = bar.querySelector("#resumeDelayVal"); if (v) v.textContent = (this._config.sync_resume_delay_ms / 1000).toFixed(1) + "s"; };
+  }
+
+  _renderRoomVolumeSliders() {
+    const container = this.shadowRoot?.querySelector("#roomVolumes"); if (!container) return;
+    const targets = this._getSyncTargets();
+    if (!this._rooms || this._rooms.length < 2 || targets.length === 0) { container.style.display = "none"; return; }
+    const allRooms = [this._currentRoomIdx, ...targets];
+    container.style.display = "";
+    container.innerHTML = allRooms.map(idx => {
+      const room = this._rooms[idx];
+      const color = ROOM_COLORS[idx % ROOM_COLORS.length];
+      const isMaster = idx === this._currentRoomIdx;
+      const vol = isMaster ? Math.round(this._volumeLevel * 15) : (this._roomVolumes[idx] ?? 7);
+      return `<div class="room-vol-row" data-rvidx="${idx}">
+        <span class="room-vol-dot" style="background:${color}"></span>
+        <span class="room-vol-name" style="color:${color}">${this._maHoaHtml(room.name)}${isMaster ? " ★" : ""}</span>
+        <input type="range" class="room-vol-slider" min="0" max="15" value="${vol}" data-rvidx="${idx}" style="--rv-color:${color}" />
+        <span class="room-vol-label" id="rvl_${idx}">${vol}</span>
+      </div>`;
+    }).join("");
+    container.querySelectorAll(".room-vol-slider").forEach(sl => {
+      sl.oninput = () => {
+        const ridx = parseInt(sl.dataset.rvidx);
+        const v = parseInt(sl.value);
+        const lbl = container.querySelector(`#rvl_${ridx}`); if (lbl) lbl.textContent = v;
+        if (ridx === this._currentRoomIdx) {
+          this._volumeLevel = v / 15;
+          clearTimeout(this._volSendTimer);
+          this._volSendTimer = setTimeout(() => {
+            this._goiDichVu("media_player", "volume_set", { volume_level: this._volumeLevel });
+          }, 100);
+        } else {
+          this._roomVolumes[ridx] = v;
+          this[`_rvGuardUntil_${ridx}`] = Date.now() + 3000;
+          clearTimeout(this[`_rvTimer_${ridx}`]);
+          this[`_rvTimer_${ridx}`] = setTimeout(() => { this._sendVolumeToRoom(ridx, v); }, 100);
+        }
+      };
+    });
+  }
+
+  _renderRoomPills() {
+    const bar = this.shadowRoot?.querySelector("#roomBar"); if (!bar || !this._rooms) return;
+    bar.querySelectorAll(".room-pill").forEach((pill, i) => {
+      pill.classList.toggle("active", i === this._currentRoomIdx);
+    });
+    bar.querySelectorAll(".sync-cb").forEach(cb => {
+      cb.checked = this._syncRoomIdxs.has(parseInt(cb.dataset.sidx));
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // DIRECT WEBSOCKET INFRASTRUCTURE (ported from aibox-webui-card.js)
+  // ═══════════════════════════════════════════════════════════════
+
+  _wsKhoiTaoKetNoi() {
+    const attrs = this._thuocTinh();
+    const host = attrs._device_host;
+    const wsUrl = attrs._device_ws_url;
+    const aiboxWsUrl = attrs._device_aibox_ws_url;
+    if (!host) return;
+    this._deviceHost = host;
+    if (wsUrl) {
+      const m = wsUrl.match(/:(\d+)$/);
+      if (m) this._deviceSpkPort = Number(m[1]);
+    }
+    if (aiboxWsUrl) {
+      const m = aiboxWsUrl.match(/:(\d+)$/);
+      if (m) this._deviceAiboxPort = Number(m[1]);
+    }
+    this._connectMainWs();
+    this._connectSpkWs();
+  }
+
+  _connectMainWs() {
+    if (!this._deviceHost) return;
+    if (this._mainWs && (this._mainWs.readyState === 0 || this._mainWs.readyState === 1)) return;
+    clearTimeout(this._mainReconnect);
+    const url = `ws://${this._deviceHost}:${this._deviceAiboxPort}`;
+    let ws;
+    try { ws = new WebSocket(url); } catch (_) { return; }
+    this._mainWs = ws;
+    ws.onopen = () => {
+      this._mainWsConnected = true;
+      this._wsDropCount = 0;
+      this._wsRequestInitial();
+    };
+    ws.onmessage = (ev) => { this._handleMainWsMsg(ev.data); };
+    ws.onclose = () => {
+      this._mainWsConnected = false;
+      this._mainWs = null;
+      this._wsDropCount++;
+      if (this._wsDropCount < 5) {
+        this._mainReconnect = setTimeout(() => this._connectMainWs(), 2000);
+      }
+    };
+    ws.onerror = () => {};
+  }
+
+  _connectSpkWs() {
+    if (!this._deviceHost) return;
+    if (this._spkWs && (this._spkWs.readyState === 0 || this._spkWs.readyState === 1)) return;
+    clearTimeout(this._spkReconnect);
+    const url = `ws://${this._deviceHost}:${this._deviceSpkPort}`;
+    let ws;
+    try { ws = new WebSocket(url); } catch (_) { return; }
+    this._spkWs = ws;
+    ws.onopen = () => { this._startSpkHeartbeat(); };
+    ws.onmessage = (ev) => { this._handleSpkWsMsg(ev.data); };
+    ws.onclose = () => {
+      this._stopSpkHeartbeat();
+      this._spkWs = null;
+      this._spkReconnect = setTimeout(() => this._connectSpkWs(), 3000);
+    };
+    ws.onerror = () => {};
+  }
+
+  _closeAllWs() {
+    clearTimeout(this._mainReconnect);
+    clearTimeout(this._spkReconnect);
+    this._stopSpkHeartbeat();
+    if (this._mainWs) {
+      try { this._mainWs.onclose = null; this._mainWs.close(); } catch (_) {}
+      this._mainWs = null;
+    }
+    if (this._spkWs) {
+      try { this._spkWs.onclose = null; this._spkWs.close(); } catch (_) {}
+      this._spkWs = null;
+    }
+    this._mainWsConnected = false;
+  }
+
+  _startSpkHeartbeat() {
+    this._stopSpkHeartbeat();
+    if (this._spkWs?.readyState === 1) {
+      this._spkWs.send(JSON.stringify({ type: "get_info" }));
+      this._spkWs.send(JSON.stringify({ type: "get_eq_config" }));
+    }
+    this._spkHb = setInterval(() => {
+      if (this._spkWs?.readyState === 1) this._spkWs.send(JSON.stringify({ type: "get_info" }));
+    }, 2000);
+    this._spkEqHb = setInterval(() => {
+      if (this._spkWs?.readyState === 1) {
+        this._spkWs.send(JSON.stringify({ type: "get_eq_config" }));
+        this._spkWs.send(JSON.stringify({ type: "get_device_info" }));
+      }
+    }, 3000);
+  }
+
+  _stopSpkHeartbeat() {
+    if (this._spkHb) { clearInterval(this._spkHb); this._spkHb = null; }
+    if (this._spkEqHb) { clearInterval(this._spkEqHb); this._spkEqHb = null; }
+  }
+
+  // Send to main AiboxPlus WS (port 8082)
+  _sendWs(obj) {
+    if (this._mainWs?.readyState === 1) {
+      this._mainWs.send(JSON.stringify(obj));
+    }
+  }
+
+  // Send to speaker WS (port 8080), fallback to main WS
+  _sendSpkWs(obj) {
+    if (this._spkWs?.readyState === 1) {
+      this._spkWs.send(JSON.stringify(obj));
+    } else {
+      this._sendWs(obj);
+    }
+  }
+
+  // Helper for speaker message format
+  _sendSpkMsg(arg1, arg2, obj) {
+    const d = { type: "send_message", what: 4, arg1, arg2 };
+    if (obj !== undefined) d.obj = String(obj);
+    this._sendSpkWs(d);
+  }
+
+  _wsRequestInitial() {
+    this._sendWs({ action: "get_info" });
+    if (!this._spkWs || this._spkWs.readyState > 1) {
+      this._connectSpkWs();
+    }
+  }
+
+  // ─── Main WS Message Handler (AiboxPlus port 8082) ──────────
+  _handleMainWsMsg(raw) {
+    let d;
+    try { d = JSON.parse(raw); } catch { return; }
+    const type = d.type || d.action || "";
+
+    // --- Chat messages ---
+    if (type === "chat_message" && d.content) {
+      this._chatHistory.push(d);
+      if (this._activeTab === "chat") this._veGiaoDien();
+    }
+    if (type === "chat_state" || type === "chat_session_state") {
+      // Update chat state in entity will happen via HA polling
+    }
+    if (type === "chat_history" && Array.isArray(d.history)) {
+      this._chatHistory = d.history;
+      this._chatHistoryLoaded = true;
+      if (this._activeTab === "chat") this._veGiaoDien();
+    }
+
+    // --- Playback state ---
+    if (type === "playback_state") {
+      const m = d;
+      if (m.title) {
+        this._nowPlayingCache = this._taoNowPlayingCache();
+        this._nowPlayingCache.title = m.title || "";
+        this._nowPlayingCache.artist = m.artist || "";
+        this._nowPlayingCache.thumbnail = m.thumbnail_url || m.thumb || "";
+      }
+      if (m.is_playing !== undefined) {
+        this._livePlaying = Boolean(m.is_playing);
+      }
+      if (typeof m.position === "number") {
+        this._livePositionSeconds = m.position;
+        this._liveTickAt = Date.now();
+      }
+      if (typeof m.duration === "number") {
+        this._liveDurationSeconds = m.duration;
+      }
+      this._dongBoTienDoDom();
+      this._capNhatHenGioTienDo();
+      if (this._activeTab === "media") this._veGiaoDien();
+    }
+
+    // --- Wake word / Custom AI state ---
+    if (type === "wake_word_enabled_state" || type === "wake_word_get_enabled_result") {
+      if (d.enabled !== undefined) this._wakeEnabled = Boolean(d.enabled);
+      if (this._activeTab === "control") this._veGiaoDien();
+    }
+    if (type === "wake_word_sensitivity_state" || type === "wake_word_get_sensitivity_result") {
+      if (d.sensitivity !== undefined) this._wakeSensitivity = Number(d.sensitivity);
+      if (this._activeTab === "control") this._veGiaoDien();
+    }
+    if (type === "custom_ai_state" || type === "custom_ai_enabled_state" || type === "custom_ai_get_enabled_result") {
+      if (d.enabled !== undefined) this._antiDeafEnabled = Boolean(d.enabled);
+      if (this._activeTab === "control") this._veGiaoDien();
+    }
+
+    // --- Voice / Live2D ---
+    if (type === "voice_id_state" || type === "voice_id_get_result") {
+      if (d.voice_id !== undefined) this._voiceId = Number(d.voice_id);
+      if (this._activeTab === "control") this._veGiaoDien();
+    }
+    if (type === "live2d_model" || type === "live2d_get_model_result") {
+      if (d.model) this._live2dModel = String(d.model);
+      if (this._activeTab === "control") this._veGiaoDien();
+    }
+
+    // --- TikTok ---
+    if (type === "tiktok_reply_state" || type === "tiktok_reply_result") {
+      if (d.enabled !== undefined) this._tiktokReply = Boolean(d.enabled);
+      if (this._activeTab === "chat") this._veGiaoDien();
+    }
+
+    // --- Alarms ---
+    if (type === "alarm_list" || type === "alarm_list_result") {
+      this._alarms = Array.isArray(d.alarms) ? d.alarms : (Array.isArray(d.list) ? d.list : []);
+      if (this._activeTab === "control") this._veGiaoDien();
+    }
+    if (type === "alarm_added" || type === "alarm_deleted" || type === "alarm_toggled" || type === "alarm_edited") {
+      this._sendWs({ action: "alarm_list" });
+    }
+
+    // --- LED ---
+    if (type === "led_state" || type === "led_toggle_result" || type === "led_get_state_result") {
+      // LED state handled by entity attributes
+    }
+
+    // --- MAC ---
+    if (type === "mac_get_result" || type === "mac_random_result" || type === "mac_clear_result" || type === "mac_result") {
+      if (d.mac) this._macAddress = String(d.mac);
+      if (d.is_custom !== undefined) this._macType = d.is_custom ? "Custom" : "Real";
+      if (d.type) this._macType = String(d.type);
+      if (this._activeTab === "system") this._veGiaoDien();
+    }
+
+    // --- OTA ---
+    if (type === "ota_get_result" || type === "ota_config") {
+      if (d.url) this._otaSelected = String(d.url);
+      if (Array.isArray(d.servers)) this._otaServers = d.servers;
+      if (Array.isArray(d.options)) this._otaServers = d.options;
+      if (this._activeTab === "system") this._veGiaoDien();
+    }
+    if (type === "ota_set_result") {
+      if (this._activeTab === "system") this._veGiaoDien();
+    }
+
+    // --- HASS config ---
+    if (type === "hass_get_result" || type === "hass_config") {
+      if (d.url !== undefined) this._hassUrl = String(d.url || "");
+      if (d.agent_id !== undefined) this._hassAgentId = String(d.agent_id || "");
+      if (this._activeTab === "system") this._veGiaoDien();
+    }
+
+    // --- WiFi ---
+    if (type === "wifi_scan_result") {
+      this._wifiScanResults = Array.isArray(d.networks) ? d.networks : (Array.isArray(d.results) ? d.results : []);
+      this._wifiScanning = false;
+      if (this._activeTab === "system") this._veGiaoDien();
+    }
+    if (type === "wifi_status" || type === "wifi_get_status_result" || type === "wifi_status_result" || type === "wifi_info") {
+      if (d.ssid || d.status) this._wifiStatus = d.ssid ? `Connected: ${d.ssid}` : String(d.status || "");
+      if (this._activeTab === "system") this._veGiaoDien();
+    }
+    if (type === "wifi_saved_result" || type === "wifi_saved_list") {
+      this._wifiSavedNetworks = Array.isArray(d.networks) ? d.networks : (Array.isArray(d.saved) ? d.saved : []);
+      if (this._activeTab === "system") this._veGiaoDien();
+    }
+
+    // --- Search results ---
+    if (type === "search_result" || type === "zing_result") {
+      // Search results handled via HA entity attributes (last_music_search)
+      // But we refresh entity to pick up new results faster
+      this._lamMoiEntity(100);
+    }
+
+    // --- Playlist events ---
+    if (type === "playlist_list_result" || type === "playlist_created" || type === "playlist_deleted" ||
+        type === "playlist_song_added" || type === "playlist_song_removed") {
+      this._lamMoiEntity(100);
+    }
+  }
+
+  // ─── Speaker WS Message Handler (port 8080) ─────────────────
+  _handleSpkWsMsg(raw) {
+    let d;
+    try { d = JSON.parse(raw); } catch { return; }
+    let s;
+    if (typeof d.data === "string") { try { s = JSON.parse(d.data); } catch { s = d; } } else { s = d.data || d; }
+
+    // --- Volume ---
+    if (!this._wsVolDragging && Date.now() > this._wsVolGuardUntil) {
+      const vol = s.vol !== undefined ? Number(s.vol) : null;
+      if (vol !== null) {
+        this._volumeLevel = vol / 100;
+        if (this._activeTab === "media") {
+          const slider = this.shadowRoot?.getElementById("media-volume");
+          if (slider) slider.value = Math.round(this._volumeLevel * 100);
+        }
+      }
+    }
+
+    // --- Control toggles ---
+    const ctrlOk = Date.now() - this._wsGuardCtrl > 3000;
+    if (ctrlOk) {
+      let changed = false;
+      if (s.dlna_open !== undefined) { this._dlnaEnabled = Boolean(s.dlna_open); changed = true; }
+      if (s.airplay_open !== undefined) { this._airplayEnabled = Boolean(s.airplay_open); changed = true; }
+      if (s.device_state !== undefined) { this._bluetoothEnabled = (s.device_state === 3); changed = true; }
+      if (s.music_light_enable !== undefined) { this._mainLightEnabled = Boolean(s.music_light_enable); changed = true; }
+      if (s.music_light_luma !== undefined) { this._mainLightBrightness = Math.max(1, Math.min(200, Math.round(s.music_light_luma))); changed = true; }
+      if (s.music_light_chroma !== undefined) { this._mainLightSpeed = Math.max(1, Math.min(100, Math.round(s.music_light_chroma))); changed = true; }
+      if (s.music_light_mode !== undefined) { this._mainLightMode = s.music_light_mode; changed = true; }
+      if (changed && (this._activeTab === "control" || this._activeTab === "system")) this._veGiaoDien();
+    }
+
+    // --- Audio engine (EQ, Bass, Loudness, Mixer) ---
+    const isEqResp = d.type === "get_eq_config" || d.code === 200;
+    const audioOk = isEqResp || (Date.now() - this._wsGuardAudio > 3000);
+    if (audioOk) {
+      let changed = false;
+      if (s.eq) {
+        const eqEn = s.eq.Eq_Enable !== undefined ? s.eq.Eq_Enable : s.eq.sound_effects_eq_enable;
+        if (eqEn !== undefined) { this._eqEnabled = Boolean(eqEn); changed = true; }
+        if (s.eq.Bands?.list) {
+          s.eq.Bands.list.forEach((b, i) => {
+            const lv = b.BandLevel ?? 0;
+            if (i < this._eqBands.length) this._eqBands[i] = lv;
+          });
+          this._eqBandCount = s.eq.Bands.list.length;
+          changed = true;
+        }
+      }
+      if (s.bass) {
+        const bassEn = s.bass.Bass_Enable ?? s.bass.sound_effects_bass_enable;
+        if (bassEn !== undefined) { this._bassEnabled = Boolean(bassEn); changed = true; }
+        if (s.bass.Current_Strength !== undefined) { this._bassStrength = s.bass.Current_Strength; changed = true; }
+      }
+      if (s.loudness) {
+        const loudEn = s.loudness.Loudness_Enable ?? s.loudness.sound_effects_loudness_enable;
+        if (loudEn !== undefined) { this._loudnessEnabled = Boolean(loudEn); changed = true; }
+        if (s.loudness.Current_Gain !== undefined) { this._loudnessGain = Math.round(s.loudness.Current_Gain); changed = true; }
+      }
+      if (s.Mixer) {
+        const bvRaw = s.Mixer["DAC Digital Volume L"];
+        if (bvRaw !== undefined) { this._dacBassVol = parseInt(bvRaw, 10); changed = true; }
+        const hvRaw = s.Mixer["DAC Digital Volume R"];
+        if (hvRaw !== undefined) { this._dacHighVol = parseInt(hvRaw, 10); changed = true; }
+      }
+      if (changed && this._activeTab === "system") this._veGiaoDien();
+    }
+
+    // --- CPU/RAM from get_device_info ---
+    if (d.type === "get_device_info") {
+      const dd = typeof d.data === "string" ? (() => { try { return JSON.parse(d.data); } catch { return {}; } })() : (d.data || {});
+      if (Array.isArray(dd.cpuinfo) && dd.cpuinfo.length > 2) {
+        this._cpuPercent = Math.round(dd.cpuinfo[2] * 100 * 10) / 10;
+      }
+      if (typeof dd.meminfo === "string") {
+        const mTotal = (dd.meminfo.match(/MemTotal:\s+(\d+)/) || [])[1];
+        const mFree = (dd.meminfo.match(/MemFree:\s+(\d+)/) || [])[1];
+        const mBuf = (dd.meminfo.match(/Buffers:\s+(\d+)/) || [])[1];
+        const mCach = (dd.meminfo.match(/\bCached:\s+(\d+)/) || [])[1];
+        if (mTotal && mFree) {
+          const used = parseInt(mTotal) - parseInt(mFree) - (parseInt(mBuf) || 0) - (parseInt(mCach) || 0);
+          this._ramPercent = Math.round(used / parseInt(mTotal) * 100);
+        }
+      }
+      if (this._activeTab === "system") this._veGiaoDien();
+    }
+  }
+
   _ganSuKien() {
     const root = this.shadowRoot;
     if (!root) return;
+
+    // ── Room pills + Sync checkboxes ──
+    if (this._rooms) {
+      root.querySelectorAll(".room-pill").forEach(pill => {
+        pill.addEventListener("click", () => this._switchRoom(parseInt(pill.dataset.ridx)));
+      });
+      root.querySelectorAll(".sync-cb").forEach(cb => {
+        cb.addEventListener("change", () => {
+          const idx = parseInt(cb.dataset.sidx);
+          if (cb.checked) {
+            this._syncRoomIdxs.add(idx);
+            this._connectMultiRoom(idx);
+            const label = cb.closest(".sync-cb-label");
+            if (label) { label.classList.add("synced"); const icon = label.querySelector(".sync-cb-icon"); if (icon) icon.textContent = "🔗"; }
+          } else {
+            this._syncRoomIdxs.delete(idx);
+            this._disconnectMultiRoom(idx);
+            const label = cb.closest(".sync-cb-label");
+            if (label) { label.classList.remove("synced"); const icon = label.querySelector(".sync-cb-icon"); if (icon) icon.textContent = "⭕"; }
+          }
+          this._lsSet("syncIdxs", Array.from(this._syncRoomIdxs));
+          this._renderSyncBar();
+          this._renderRoomVolumeSliders();
+        });
+      });
+    }
 
     root.querySelectorAll("[data-tab]").forEach((el) => {
       el.addEventListener("click", () => {
@@ -5794,16 +6758,11 @@ class PhicommR1Card extends HTMLElement {
         const desired = Boolean(ev.target.checked);
         this._wakeEnabled = desired;
         this._datCongTacCho("wake_enabled", desired);
+        this._sendWs({ action: "wake_word_set_enabled", enabled: desired });
         try {
-          await this._goiDichVu("phicomm_r1", "wake_word_set_enabled", {
-            enabled: desired,
-          });
-          await this._lamMoiEntity(250, 2);
+          await this._goiDichVu("phicomm_r1", "wake_word_set_enabled", { enabled: desired });
         } catch (err) {
           console.warn("wake_word_set_enabled failed", err);
-          this._xoaCongTacCho("wake_enabled");
-          this._wakeEnabled = !desired;
-          ev.target.checked = this._wakeEnabled;
         }
       });
     }
@@ -5853,61 +6812,38 @@ class PhicommR1Card extends HTMLElement {
 
     const dlnaEnabled = root.getElementById("dlna-enabled");
     if (dlnaEnabled) {
-      dlnaEnabled.addEventListener("change", async (ev) => {
+      dlnaEnabled.addEventListener("change", (ev) => {
         const desired = Boolean(ev.target.checked);
         this._dlnaEnabled = desired;
-        this._datCongTacCho("dlna_enabled", desired);
-        try {
-          await this._goiDichVu("phicomm_r1", "set_dlna", {
-            enabled: desired,
-          });
-          await this._lamMoiEntity(250, 2);
-        } catch (err) {
-          console.warn("set_dlna failed", err);
-          this._xoaCongTacCho("dlna_enabled");
-          this._dlnaEnabled = !desired;
-          ev.target.checked = this._dlnaEnabled;
-        }
+        this._wsGuardCtrl = Date.now();
+        this._sendSpkWs({ type: "Set_DLNA_Open", open: desired ? 1 : 0 });
+        this._goiDichVu("phicomm_r1", "set_dlna", { enabled: desired }).catch(() => {});
       });
     }
 
     const airplayEnabled = root.getElementById("airplay-enabled");
     if (airplayEnabled) {
-      airplayEnabled.addEventListener("change", async (ev) => {
+      airplayEnabled.addEventListener("change", (ev) => {
         const desired = Boolean(ev.target.checked);
         this._airplayEnabled = desired;
-        this._datCongTacCho("airplay_enabled", desired);
-        try {
-          await this._goiDichVu("phicomm_r1", "set_airplay", {
-            enabled: desired,
-          });
-          await this._lamMoiEntity(250, 2);
-        } catch (err) {
-          console.warn("set_airplay failed", err);
-          this._xoaCongTacCho("airplay_enabled");
-          this._airplayEnabled = !desired;
-          ev.target.checked = this._airplayEnabled;
-        }
+        this._wsGuardCtrl = Date.now();
+        this._sendSpkWs({ type: "Set_AirPlay_Open", open: desired ? 1 : 0 });
+        this._goiDichVu("phicomm_r1", "set_airplay", { enabled: desired }).catch(() => {});
       });
     }
 
     const bluetoothEnabled = root.getElementById("bluetooth-enabled");
     if (bluetoothEnabled) {
-      bluetoothEnabled.addEventListener("change", async (ev) => {
+      bluetoothEnabled.addEventListener("change", (ev) => {
         const desired = Boolean(ev.target.checked);
         this._bluetoothEnabled = desired;
-        this._datCongTacCho("bluetooth_enabled", desired);
-        try {
-          await this._goiDichVu("phicomm_r1", "set_bluetooth", {
-            enabled: desired,
-          });
-          await this._lamMoiEntity(250, 2);
-        } catch (err) {
-          console.warn("set_bluetooth failed", err);
-          this._xoaCongTacCho("bluetooth_enabled");
-          this._bluetoothEnabled = !desired;
-          ev.target.checked = this._bluetoothEnabled;
-        }
+        this._wsGuardCtrl = Date.now();
+        this._sendSpkWs({
+          type: "send_message", what: 64,
+          arg1: desired ? 1 : 2, arg2: -1,
+          type_id: desired ? "Open Bluetooth" : "Close Bluetooth",
+        });
+        this._goiDichVu("phicomm_r1", "set_bluetooth", { enabled: desired }).catch(() => {});
       });
     }
 
@@ -5978,12 +6914,11 @@ class PhicommR1Card extends HTMLElement {
     if (eqEnabled) {
       eqEnabled.addEventListener("change", async (ev) => {
         this._eqEnabled = Boolean(ev.target.checked);
+        this._wsGuardAudio = Date.now();
         this._batDauCanhGacDongBoEq(1400);
         this._capNhatEqGiaoDien(root);
-        await this._goiDichVu("media_player", "set_eq_enable", {
-          enabled: this._eqEnabled,
-        });
-        await this._lamMoiEntity(250, 2);
+        this._sendSpkWs({ type: "set_eq_enable", enable: this._eqEnabled });
+        this._goiDichVu("media_player", "set_eq_enable", { enabled: this._eqEnabled }).catch(() => {});
       });
     }
 
@@ -6015,18 +6950,14 @@ class PhicommR1Card extends HTMLElement {
         this._eqLevel = level;
         this._eqBands[band] = level;
         this._batDauCanhGacDongBoEq(1600);
+        this._wsGuardAudio = Date.now();
         if (!this._eqEnabled) {
           this._eqEnabled = true;
           this._capNhatEqGiaoDien(root);
-          await this._goiDichVu("media_player", "set_eq_enable", {
-            enabled: true,
-          });
+          this._sendSpkWs({ type: "set_eq_enable", enable: true });
         }
-        await this._goiDichVu("media_player", "set_eq_bandlevel", {
-          band,
-          level,
-        });
-        await this._lamMoiEntity(220, 2);
+        this._sendSpkWs({ type: "set_eq_bandlevel", band, level: parseInt(level) });
+        this._goiDichVu("media_player", "set_eq_bandlevel", { band, level }).catch(() => {});
         this._xuLyRenderCho();
       });
       slider.addEventListener("blur", () => {
@@ -6042,12 +6973,10 @@ class PhicommR1Card extends HTMLElement {
 
     const bassEnabled = root.getElementById("bass-enabled");
     if (bassEnabled) {
-      bassEnabled.addEventListener("change", async (ev) => {
+      bassEnabled.addEventListener("change", (ev) => {
         this._bassEnabled = Boolean(ev.target.checked);
-        await this._goiDichVu("phicomm_r1", "set_bass_enable", {
-          enabled: this._bassEnabled,
-        });
-        await this._lamMoiEntity(250, 2);
+        this._wsGuardAudio = Date.now();
+        this._sendSpkWs({ type: "set_bass_enable", enable: this._bassEnabled });
       });
     }
 
@@ -6056,23 +6985,19 @@ class PhicommR1Card extends HTMLElement {
       bassStrength.addEventListener("input", (ev) => {
         this._bassStrength = Number(ev.target.value);
       });
-      bassStrength.addEventListener("change", async (ev) => {
+      bassStrength.addEventListener("change", (ev) => {
         this._bassStrength = Number(ev.target.value);
-        await this._goiDichVu("phicomm_r1", "set_bass_strength", {
-          strength: this._bassStrength,
-        });
-        await this._lamMoiEntity(250, 2);
+        this._wsGuardAudio = Date.now();
+        this._sendSpkWs({ type: "set_bass_strength", strength: parseInt(this._bassStrength) });
       });
     }
 
     const loudnessEnabled = root.getElementById("loudness-enabled");
     if (loudnessEnabled) {
-      loudnessEnabled.addEventListener("change", async (ev) => {
+      loudnessEnabled.addEventListener("change", (ev) => {
         this._loudnessEnabled = Boolean(ev.target.checked);
-        await this._goiDichVu("phicomm_r1", "set_loudness_enable", {
-          enabled: this._loudnessEnabled,
-        });
-        await this._lamMoiEntity(250, 2);
+        this._wsGuardAudio = Date.now();
+        this._sendSpkWs({ type: "set_loudness_enable", enable: this._loudnessEnabled });
       });
     }
 
@@ -6081,32 +7006,21 @@ class PhicommR1Card extends HTMLElement {
       loudnessGain.addEventListener("input", (ev) => {
         this._loudnessGain = Number(ev.target.value);
       });
-      loudnessGain.addEventListener("change", async (ev) => {
+      loudnessGain.addEventListener("change", (ev) => {
         this._loudnessGain = Number(ev.target.value);
-        await this._goiDichVu("phicomm_r1", "set_loudness_gain", {
-          gain: this._loudnessGain,
-        });
-        await this._lamMoiEntity(250, 2);
+        this._wsGuardAudio = Date.now();
+        this._sendSpkWs({ type: "set_loudness_gain", gain: parseInt(this._loudnessGain) });
       });
     }
 
     const mainLightEnabled = root.getElementById("main-light-enabled");
     if (mainLightEnabled) {
-      mainLightEnabled.addEventListener("change", async (ev) => {
+      mainLightEnabled.addEventListener("change", (ev) => {
         const desired = Boolean(ev.target.checked);
         this._mainLightEnabled = desired;
-        this._datCongTacCho("main_light_enabled", desired);
-        try {
-          await this._goiDichVu("phicomm_r1", "set_main_light", {
-            enabled: desired,
-          });
-          await this._lamMoiEntity(250, 2);
-        } catch (err) {
-          console.warn("set_main_light failed", err);
-          this._xoaCongTacCho("main_light_enabled");
-          this._mainLightEnabled = !desired;
-          ev.target.checked = this._mainLightEnabled;
-        }
+        this._wsGuardCtrl = Date.now();
+        this._sendSpkMsg(64, desired ? 1 : 0);
+        this._goiDichVu("phicomm_r1", "set_main_light", { enabled: desired }).catch(() => {});
       });
     }
 
@@ -6115,12 +7029,10 @@ class PhicommR1Card extends HTMLElement {
       mainBrightness.addEventListener("input", (ev) => {
         this._mainLightBrightness = Number(ev.target.value);
       });
-      mainBrightness.addEventListener("change", async (ev) => {
+      mainBrightness.addEventListener("change", (ev) => {
         this._mainLightBrightness = Number(ev.target.value);
-        await this._goiDichVu("phicomm_r1", "set_light_brightness", {
-          brightness: this._mainLightBrightness,
-        });
-        await this._lamMoiEntity(250, 2);
+        this._wsGuardCtrl = Date.now();
+        this._sendSpkMsg(65, this._mainLightBrightness);
       });
     }
 
@@ -6129,21 +7041,20 @@ class PhicommR1Card extends HTMLElement {
       mainSpeed.addEventListener("input", (ev) => {
         this._mainLightSpeed = Number(ev.target.value);
       });
-      mainSpeed.addEventListener("change", async (ev) => {
+      mainSpeed.addEventListener("change", (ev) => {
         this._mainLightSpeed = Number(ev.target.value);
-        await this._goiDichVu("phicomm_r1", "set_light_speed", {
-          speed: this._mainLightSpeed,
-        });
-        await this._lamMoiEntity(250, 2);
+        this._wsGuardCtrl = Date.now();
+        this._sendSpkMsg(66, this._mainLightSpeed);
       });
     }
 
     root.querySelectorAll(".light-mode").forEach((el) => {
-      el.addEventListener("click", async () => {
+      el.addEventListener("click", () => {
         const mode = Number(el.dataset.mode || "0");
         this._mainLightMode = mode;
-        await this._goiDichVu("phicomm_r1", "set_light_mode", { mode });
-        await this._lamMoiEntity(250, 2);
+        this._wsGuardCtrl = Date.now();
+        this._sendSpkMsg(67, mode);
+        this._veGiaoDien();
       });
     });
 
@@ -6186,8 +7097,8 @@ class PhicommR1Card extends HTMLElement {
     if (voiceSel) {
       voiceSel.addEventListener("change", async (ev) => {
         this._voiceId = Number(ev.target.value) || 1;
-        await this._goiDichVu("phicomm_r1", "set_voice", { voice_id: this._voiceId });
-        await this._lamMoiEntity(250);
+        this._sendWs({ action: "voice_id_set", voice_id: this._voiceId });
+        await this._goiDichVu("phicomm_r1", "set_voice", { voice_id: this._voiceId }).catch(() => {});
       });
     }
     const voicePreview = root.getElementById("voice-preview");
@@ -6204,8 +7115,8 @@ class PhicommR1Card extends HTMLElement {
     if (live2dSel) {
       live2dSel.addEventListener("change", async (ev) => {
         this._live2dModel = ev.target.value;
-        await this._goiDichVu("phicomm_r1", "set_live2d", { model: this._live2dModel });
-        await this._lamMoiEntity(250);
+        this._sendWs({ action: "live2d_set_model", model: this._live2dModel });
+        this._goiDichVu("phicomm_r1", "set_live2d", { model: this._live2dModel }).catch(() => {});
       });
     }
 
@@ -6219,9 +7130,8 @@ class PhicommR1Card extends HTMLElement {
       });
       surWidth.addEventListener("change", async (ev) => {
         this._surroundWidth = Number(ev.target.value);
-        await this._goiDichVu("phicomm_r1", "set_mixer_value", {
-          control_name: "Surround Width", value: String(this._surroundWidth),
-        });
+        this._wsGuardAudio = Date.now();
+        this._sendSpkMsg(60, this._surroundWidth);
       });
     }
     const surPresence = root.getElementById("sur-presence");
@@ -6247,10 +7157,9 @@ class PhicommR1Card extends HTMLElement {
         else if (el.dataset.sur === "wide") { w = 90; p = 40; s = 60; }
         else { w = 40; p = 30; s = 10; }
         this._surroundWidth = w; this._surroundPresence = p; this._surroundSpace = s;
+        this._wsGuardAudio = Date.now();
+        this._sendSpkMsg(60, w);
         this._veGiaoDien();
-        this._goiDichVu("phicomm_r1", "set_mixer_value", {
-          control_name: "Surround Width", value: String(w),
-        });
       });
     });
 
@@ -6264,9 +7173,8 @@ class PhicommR1Card extends HTMLElement {
       });
       dacBassVol.addEventListener("change", async (ev) => {
         this._dacBassVol = Number(ev.target.value);
-        await this._goiDichVu("phicomm_r1", "set_mixer_value", {
-          control_name: "DAC Digital Volume L", value: String(this._dacBassVol),
-        });
+        this._wsGuardAudio = Date.now();
+        this._sendSpkWs({ type: "sends", list: [{ type: "setMixerValue", controlName: "DAC Digital Volume L", value: String(this._dacBassVol) }, { type: "get_eq_config" }] });
       });
     }
     const dacHighVol = root.getElementById("dac-high-vol");
@@ -6278,9 +7186,8 @@ class PhicommR1Card extends HTMLElement {
       });
       dacHighVol.addEventListener("change", async (ev) => {
         this._dacHighVol = Number(ev.target.value);
-        await this._goiDichVu("phicomm_r1", "set_mixer_value", {
-          control_name: "DAC Digital Volume R", value: String(this._dacHighVol),
-        });
+        this._wsGuardAudio = Date.now();
+        this._sendSpkWs({ type: "sends", list: [{ type: "setMixerValue", controlName: "DAC Digital Volume R", value: String(this._dacHighVol) }, { type: "get_eq_config" }] });
       });
     }
 
@@ -6296,25 +7203,20 @@ class PhicommR1Card extends HTMLElement {
     }
     const alarmRefresh = root.getElementById("alarm-refresh");
     if (alarmRefresh) {
-      alarmRefresh.addEventListener("click", async () => {
-        await this._goiDichVu("phicomm_r1", "alarm_list");
-        await this._lamMoiEntity(300);
+      alarmRefresh.addEventListener("click", () => {
+        this._sendWs({ action: "alarm_list" });
       });
     }
     const alarmSave = root.getElementById("alarm-save");
     if (alarmSave) {
-      alarmSave.addEventListener("click", async () => {
+      alarmSave.addEventListener("click", () => {
         const h = Number(root.getElementById("alarm-hour")?.value || 7);
         const m = Number(root.getElementById("alarm-minute")?.value || 0);
         const rep = root.getElementById("alarm-repeat")?.value || "";
         const days = root.getElementById("alarm-days")?.value || "";
-        await this._goiDichVu("phicomm_r1", "alarm_add", {
-          hour: h, minute: m, repeat: rep, days: days,
-        });
+        this._sendWs({ action: "alarm_add", hour: h, minute: m, repeat: rep, days: days });
         this._alarmDialogOpen = false;
-        await this._lamMoiEntity(300);
-        await this._goiDichVu("phicomm_r1", "alarm_list");
-        await this._lamMoiEntity(300);
+        this._veGiaoDien();
       });
     }
     const alarmCancel = root.getElementById("alarm-cancel");
@@ -6325,30 +7227,26 @@ class PhicommR1Card extends HTMLElement {
       });
     }
     root.querySelectorAll(".alarm-toggle").forEach((el) => {
-      el.addEventListener("change", async (ev) => {
+      el.addEventListener("change", (ev) => {
         const id = el.dataset.alarmId;
         const enabled = Boolean(ev.target.checked);
-        await this._goiDichVu("phicomm_r1", "alarm_toggle", { alarm_id: id, enabled });
-        await this._lamMoiEntity(250);
+        this._sendWs({ action: "alarm_toggle", alarm_id: id, enabled });
       });
     });
     root.querySelectorAll(".alarm-delete").forEach((el) => {
-      el.addEventListener("click", async () => {
+      el.addEventListener("click", () => {
         const id = el.dataset.alarmId;
         if (!confirm("Xóa báo thức này?")) return;
-        await this._goiDichVu("phicomm_r1", "alarm_delete", { alarm_id: id });
-        await this._lamMoiEntity(300);
-        await this._goiDichVu("phicomm_r1", "alarm_list");
-        await this._lamMoiEntity(300);
+        this._sendWs({ action: "alarm_delete", alarm_id: id });
       });
     });
 
     // --- TikTok Reply ---
     const tiktokToggle = root.getElementById("tiktok-toggle");
     if (tiktokToggle) {
-      tiktokToggle.addEventListener("click", async () => {
+      tiktokToggle.addEventListener("click", () => {
         this._tiktokReply = !this._tiktokReply;
-        await this._goiDichVu("phicomm_r1", "set_tiktok_reply", { enabled: this._tiktokReply });
+        this._sendWs({ action: "tiktok_reply_toggle", enabled: this._tiktokReply });
         this._veGiaoDien();
       });
     }
@@ -6356,88 +7254,68 @@ class PhicommR1Card extends HTMLElement {
     // --- System Info ---
     const sysInfoRefresh = root.getElementById("sys-info-refresh");
     if (sysInfoRefresh) {
-      sysInfoRefresh.addEventListener("click", async () => {
-        await this._goiDichVu("phicomm_r1", "get_system_info");
-        await this._lamMoiEntity(300);
+      sysInfoRefresh.addEventListener("click", () => {
+        if (this._spkWs?.readyState === 1) {
+          this._spkWs.send(JSON.stringify({ type: "get_device_info" }));
+        }
+        this._sendWs({ action: "get_info" });
       });
     }
 
     // --- MAC Address ---
     const macGet = root.getElementById("mac-get");
     if (macGet) {
-      macGet.addEventListener("click", async () => {
-        await this._goiDichVu("phicomm_r1", "mac_get");
-        await this._lamMoiEntity(300);
-      });
+      macGet.addEventListener("click", () => { this._sendWs({ action: "mac_get" }); });
     }
     const macRandom = root.getElementById("mac-random");
     if (macRandom) {
-      macRandom.addEventListener("click", async () => {
+      macRandom.addEventListener("click", () => {
         if (!confirm("Random MAC sẽ có thể mất quyền. Tiếp tục?")) return;
-        await this._goiDichVu("phicomm_r1", "mac_random");
-        await this._lamMoiEntity(300);
+        this._sendWs({ action: "mac_random" });
       });
     }
     const macRestore = root.getElementById("mac-restore");
     if (macRestore) {
-      macRestore.addEventListener("click", async () => {
-        await this._goiDichVu("phicomm_r1", "mac_restore");
-        await this._lamMoiEntity(300);
-      });
+      macRestore.addEventListener("click", () => { this._sendWs({ action: "mac_clear" }); });
     }
 
     // --- OTA ---
     const otaRefresh = root.getElementById("ota-refresh");
     if (otaRefresh) {
-      otaRefresh.addEventListener("click", async () => {
-        await this._goiDichVu("phicomm_r1", "ota_get");
-        await this._lamMoiEntity(300);
-      });
+      otaRefresh.addEventListener("click", () => { this._sendWs({ action: "ota_get" }); });
     }
     const otaSave = root.getElementById("ota-save");
     if (otaSave) {
-      otaSave.addEventListener("click", async () => {
+      otaSave.addEventListener("click", () => {
         const sel = root.getElementById("ota-sel");
         const url = sel?.value || "";
-        if (url) {
-          await this._goiDichVu("phicomm_r1", "ota_set", { url });
-          await this._lamMoiEntity(300);
-        }
+        if (url) this._sendWs({ action: "ota_set", ota_url: url });
       });
     }
 
     // --- HA Settings ---
     const hassSave = root.getElementById("hass-save");
     if (hassSave) {
-      hassSave.addEventListener("click", async () => {
+      hassSave.addEventListener("click", () => {
         const url = root.getElementById("hass-url")?.value?.trim() || "";
         const agentId = root.getElementById("hass-agent")?.value?.trim() || "";
         const apiKey = root.getElementById("hass-key")?.value?.trim() || "";
-        await this._goiDichVu("phicomm_r1", "hass_set", {
-          url, agent_id: agentId, api_key: apiKey,
-        });
-        await this._lamMoiEntity(300);
+        this._sendWs({ action: "hass_set", url, agent_id: agentId, api_key: apiKey || undefined });
       });
     }
 
     // --- WiFi ---
     const wifiScan = root.getElementById("wifi-scan");
     if (wifiScan) {
-      wifiScan.addEventListener("click", async () => {
+      wifiScan.addEventListener("click", () => {
         this._wifiScanning = true;
         this._veGiaoDien();
-        await this._goiDichVu("phicomm_r1", "wifi_scan");
-        await this._lamMoiEntity(500);
-        this._wifiScanning = false;
-        this._veGiaoDien();
+        this._sendWs({ action: "wifi_scan" });
       });
     }
     const wifiSaved = root.getElementById("wifi-saved");
     if (wifiSaved) {
-      wifiSaved.addEventListener("click", async () => {
-        await this._goiDichVu("phicomm_r1", "wifi_get_status");
-        await this._lamMoiEntity(300);
-      });
+      wifiSaved.addEventListener("click", () => { this._sendWs({ action: "wifi_get_saved" }); });
     }
     root.querySelectorAll(".wifi-connect").forEach((el) => {
       el.addEventListener("click", () => {
@@ -6448,22 +7326,18 @@ class PhicommR1Card extends HTMLElement {
       });
     });
     root.querySelectorAll(".wifi-delete").forEach((el) => {
-      el.addEventListener("click", async () => {
+      el.addEventListener("click", () => {
         const ssid = el.dataset.ssid || "";
         if (!confirm(`Xóa mạng "${ssid}" đã lưu?`)) return;
-        await this._goiDichVu("phicomm_r1", "wifi_delete_saved", { ssid });
-        await this._lamMoiEntity(300);
+        this._sendWs({ action: "wifi_delete_saved", ssid });
       });
     });
     const wifiConnectConfirm = root.getElementById("wifi-connect-confirm");
     if (wifiConnectConfirm) {
-      wifiConnectConfirm.addEventListener("click", async () => {
+      wifiConnectConfirm.addEventListener("click", () => {
         const pw = root.getElementById("wifi-password")?.value || "";
-        await this._goiDichVu("phicomm_r1", "wifi_connect", {
-          ssid: this._wifiPasswordSsid, password: pw,
-        });
+        this._sendWs({ action: "wifi_connect", ssid: this._wifiPasswordSsid, password: pw });
         this._wifiPasswordDialog = false;
-        await this._lamMoiEntity(500);
         this._veGiaoDien();
       });
     }
