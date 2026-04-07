@@ -784,6 +784,10 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
             "volume_min": status.volume_min,
             "volume_max": status.volume_max,
             "playback_state_raw": status.playback_state,
+            "_device_host": self._client._host,
+            "_device_port": self._client._port,
+            "_device_ws_url": self._client._ws_url,
+            "_device_aibox_ws_url": self._client._aibox_ws_url,
         }
         for key in (
             "dlna_open",
