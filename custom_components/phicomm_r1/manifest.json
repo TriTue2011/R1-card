@@ -3,7 +3,7 @@
   "name": "Phicomm R1",
   "version": "0.2.16",
   "integration_type": "device",
-  "documentation": "https://github.com/TriTue2011/R1-card"",
+  "documentation": "https://github.com/IoTDevice/phicomm-r1-controler",
   "config_flow": true,
   "requirements": [],
   "codeowners": [],
