@@ -160,6 +160,23 @@ class PhicommR1Card extends HTMLElement {
     this._wsVolDragging = false;
     this._wsVolGuardUntil = 0;
     this._wsDropCount = 0;
+
+    // --- Multi-Room / Sync ---
+    this._rooms = null;
+    this._currentRoomIdx = 0;
+    this._syncRoomIdxs = new Set();
+    this._multiWs = {};
+    this._roomVolumes = {};
+    this._roomPlayback = {};
+    this._autoSync = false;
+    this._autoSyncTimer = null;
+    this._autoSyncDoneForSong = false;
+    this._lastSyncSongTitle = "";
+    this._syncInProgress = false;
+    this._syncSuppressUntil = 0;
+    this._syncGen = 0;
+    this._syncSettingsOpen = false;
+    this._switching = false;
   }
 
   static getStubConfig() {
@@ -191,9 +208,44 @@ class PhicommR1Card extends HTMLElement {
     const maxHeight = this._chuanHoaKichThuocCss(config.max_height ?? config.maxHeight);
     this._config = {
       title: "Phicomm R1",
+      sync_send_song: true,
+      auto_sync_delay_ms: 5000,
+      sync_pause_ms: 400,
+      sync_resume_delay_ms: 3000,
       ...config,
       max_height: maxHeight,
     };
+
+    // Parse rooms config
+    this._rooms = Array.isArray(this._config.rooms) && this._config.rooms.length
+      ? this._config.rooms.map((r, i) => ({
+          name: r.name || `Loa ${i + 1}`,
+          entity: (r.entity || "").trim(),
+          host: (r.host || "").trim(),
+        }))
+      : null;
+    if (this._rooms) {
+      if (this._currentRoomIdx === undefined || this._currentRoomIdx >= this._rooms.length) {
+        const saved = this._lsGet("roomIdx");
+        this._currentRoomIdx = (saved !== null && saved >= 0 && saved < this._rooms.length) ? saved : 0;
+      }
+      // Restore saved sync targets
+      this._syncRoomIdxs = new Set();
+      const savedSync = this._lsGet("syncIdxs");
+      if (Array.isArray(savedSync)) {
+        savedSync.forEach(i => {
+          if (typeof i === "number" && i >= 0 && i < this._rooms.length && i !== this._currentRoomIdx)
+            this._syncRoomIdxs.add(i);
+        });
+      }
+      const savedAuto = this._lsGet("autoSync");
+      if (savedAuto) this._autoSync = true;
+      // Apply current room's entity
+      if (this._rooms[this._currentRoomIdx]?.entity) {
+        this._config.entity = this._rooms[this._currentRoomIdx].entity;
+      }
+    }
+
     this._lastEntityRef = null;
     this._pendingRender = false;
     this._xoaHenGioTienDo();
@@ -237,6 +289,11 @@ class PhicommR1Card extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     if (!this._config) return;
+
+    // Apply current room's entity
+    if (this._rooms && this._rooms[this._currentRoomIdx]?.entity) {
+      this._config.entity = this._rooms[this._currentRoomIdx].entity;
+    }
 
     const entityRef = this._doiTuongTrangThai();
     const changed = entityRef !== this._lastEntityRef;
@@ -333,6 +390,12 @@ class PhicommR1Card extends HTMLElement {
 
   disconnectedCallback() {
     this._xoaHenGioTienDo();
+    this._disconnectAllMulti();
+    clearTimeout(this._autoSyncTimer);
+    this._stopSpkHeartbeat();
+    if (this._mainWs) { try { this._mainWs.close(); } catch {} this._mainWs = null; }
+    if (this._spkWs) { try { this._spkWs.close(); } catch {} this._spkWs = null; }
+    this._mainWsConnected = false;
   }
 
   _doiTuongTrangThai() {
@@ -343,6 +406,10 @@ class PhicommR1Card extends HTMLElement {
   _thuocTinh() {
     return this._doiTuongTrangThai()?.attributes || {};
   }
+
+  _lsKey(k) { return `phicomm_r1_${(this._config?.title || "card").replace(/\W+/g, "_")}_${k}`; }
+  _lsGet(k) { try { const v = localStorage.getItem(this._lsKey(k)); return v !== null ? JSON.parse(v) : null; } catch { return null; } }
+  _lsSet(k, v) { try { localStorage.setItem(this._lsKey(k), JSON.stringify(v)); } catch {} }
 
   _taoTrangThaiDialogPlaylist() {
     return {
@@ -5346,6 +5413,51 @@ class PhicommR1Card extends HTMLElement {
         }
         .wifi-item:last-child { border-bottom: none; }
         .wifi-item span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        /* ── Room pills ── */
+        .room-bar { display: flex; gap: 5px; overflow-x: auto; padding: 4px 12px 8px; scrollbar-width: none; align-items: flex-end; }
+        .room-bar::-webkit-scrollbar { display: none; }
+        .room-pill-group { display: flex; flex-direction: column; align-items: center; gap: 3px; flex-shrink: 0; }
+        .room-pill { display: flex; align-items: center; gap: 5px; padding: 6px 12px; border-radius: 999px; cursor: pointer; font-size: 11px; font-weight: 700; white-space: nowrap; border: 1px solid rgba(148,163,184,.18); background: rgba(2,6,23,.4); color: rgba(226,232,240,.6); transition: all .18s; }
+        .room-pill:hover { background: rgba(122,99,255,.2); border-color: rgba(122,99,255,.25); color: #c4b5fd; }
+        .room-pill.active { background: linear-gradient(135deg, rgba(122,99,255,.45), rgba(79,141,255,.3)); border-color: rgba(122,99,255,.5); color: #fff; box-shadow: 0 2px 14px rgba(122,99,255,.3); }
+        .room-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: rgba(148,163,184,.4); transition: all .2s; flex-shrink: 0; }
+        .sync-active-mark { font-size: 10px; line-height: 1; }
+        .sync-cb-label { display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all .15s; user-select: none; }
+        .sync-cb-label input[type=checkbox] { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
+        .sync-cb-icon { font-size: 13px; line-height: 1; transition: transform .15s; }
+        .sync-cb-label:hover .sync-cb-icon { transform: scale(1.2); }
+        .sync-cb-label.synced .sync-cb-icon { filter: drop-shadow(0 0 4px rgba(34,197,94,.6)); }
+
+        /* ── Sync bar ── */
+        .sync-bar { border-radius: 12px; background: linear-gradient(135deg, rgba(6,9,18,.7), rgba(2,6,23,.8)); border: 1px solid rgba(122,99,255,.2); padding: 8px 12px; margin-bottom: 8px; }
+        .sync-bar-inner { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+        .sync-bar-left { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 0; }
+        .sync-bar-label { font-size: 10px; font-weight: 900; color: var(--accent); letter-spacing: 1px; flex-shrink: 0; }
+        .sync-room-badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+        .sync-room-badge.ok { background: rgba(34,197,94,.15); border: 1px solid rgba(34,197,94,.35); color: #86efac; }
+        .sync-room-badge.pending { background: rgba(234,179,8,.1); border: 1px solid rgba(234,179,8,.25); color: #fbbf24; animation: syncPending 1.5s ease-in-out infinite; }
+        @keyframes syncPending { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
+        .sync-bar-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+        .sync-btn { padding: 5px 10px; border-radius: 8px; cursor: pointer; font-size: 10px; font-weight: 700; border: 1px solid rgba(122,99,255,.3); background: rgba(122,99,255,.25); color: #c4b5fd; transition: all .15s; white-space: nowrap; }
+        .sync-btn:hover { background: rgba(122,99,255,.5); border-color: rgba(122,99,255,.5); }
+        .sync-auto-on { background: linear-gradient(135deg, rgba(34,197,94,.3), rgba(21,128,61,.25)); border-color: rgba(34,197,94,.4); color: #86efac; animation: autoSyncPulse 2s ease-in-out infinite; }
+        @keyframes autoSyncPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(34,197,94,.3); } 50% { box-shadow: 0 0 8px 3px rgba(34,197,94,.2); } }
+        .sync-btn-busy { opacity: .6; cursor: not-allowed; animation: syncBusy .8s ease-in-out infinite; }
+        @keyframes syncBusy { 0%,100% { opacity: .6; } 50% { opacity: .3; } }
+        .hidden { display: none !important; }
+
+        /* ── Room volumes ── */
+        .room-volumes { border-radius: 12px; background: rgba(2,6,23,.5); border: 1px solid rgba(122,99,255,.15); padding: 8px 12px; margin-bottom: 8px; }
+        .room-vol-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+        .room-vol-row:last-child { margin-bottom: 0; }
+        .room-vol-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+        .room-vol-name { font-size: 10px; font-weight: 700; min-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .room-vol-slider { flex: 1; height: 4px; -webkit-appearance: none; appearance: none; background: rgba(148,163,184,.15); border-radius: 999px; outline: none; }
+        .room-vol-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--rv-color, var(--accent)); cursor: pointer; }
+        .room-vol-label { font-size: 10px; color: var(--muted); min-width: 16px; text-align: right; }
+        .sync-slider { flex: 1; height: 3px; -webkit-appearance: none; appearance: none; background: rgba(148,163,184,.15); border-radius: 999px; outline: none; }
+        .sync-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); cursor: pointer; }
       </style>
 
       <ha-card>
@@ -5362,12 +5474,38 @@ class PhicommR1Card extends HTMLElement {
               )
               .join("")}
           </div>
+          ${this._rooms && this._rooms.length > 1 ? `
+          <div class="room-bar" id="roomBar">
+            ${this._rooms.map((r, i) => {
+              const isActive = i === this._currentRoomIdx;
+              const isSynced = this._syncRoomIdxs.has(i);
+              const color = ROOM_COLORS[i % ROOM_COLORS.length];
+              return `<div class="room-pill-group">
+                <button class="room-pill ${isActive ? "active" : ""}" data-ridx="${i}" style="${isActive ? `--pill-color:${color}` : ""}">
+                  <span class="room-pill-dot" style="${isActive ? `background:${color};box-shadow:0 0 6px ${color}60` : ""}"></span>
+                  <span>${this._maHoaHtml(r.name)}</span>
+                </button>
+                ${!isActive ? `<label class="sync-cb-label${isSynced ? " synced" : ""}">
+                  <input type="checkbox" class="sync-cb" data-sidx="${i}"${isSynced ? " checked" : ""} />
+                  <span class="sync-cb-icon">${isSynced ? "🔗" : "⭕"}</span>
+                </label>` : `<span class="sync-active-mark" style="color:${color}">★</span>`}
+              </div>`;
+            }).join("")}
+          </div>` : ""}
           <div class="card-body">
+            ${this._activeTab === "media" && this._rooms && this._rooms.length > 1 ? `
+              <div class="sync-bar" id="syncBar" style="display:none"></div>
+              <div class="room-volumes" id="roomVolumes" style="display:none"></div>
+            ` : ""}
             ${body}
           </div>
         </div>
       </ha-card>
     `;
+
+    if (this._activeTab === "media" && this._rooms && this._rooms.length > 1) {
+      setTimeout(() => { this._renderSyncBar(); this._renderRoomVolumeSliders(); }, 0);
+    }
 
     if (this._activeTab === "chat") {
       this._damBaoTrangThaiChat();
@@ -5468,6 +5606,411 @@ class PhicommR1Card extends HTMLElement {
     } catch (err) {
       console.warn("system bootstrap refresh failed", err);
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // MULTI-ROOM / SYNC
+  // ═══════════════════════════════════════════════════════════════
+
+  _getRoomHost(idx) {
+    const room = this._rooms?.[idx];
+    if (!room) return null;
+    if (room.host) return { host: room.host, aiboxPort: 8082, spkPort: 8080 };
+    if (room.entity && this._hass) {
+      const st = this._hass.states[room.entity];
+      const a = st?.attributes || {};
+      const host = a._device_host;
+      if (!host) return null;
+      let spkPort = 8080, aiboxPort = 8082;
+      if (a._device_ws_url) { const m = a._device_ws_url.match(/:(\d+)$/); if (m) spkPort = Number(m[1]); }
+      if (a._device_aibox_ws_url) { const m = a._device_aibox_ws_url.match(/:(\d+)$/); if (m) aiboxPort = Number(m[1]); }
+      return { host, aiboxPort, spkPort };
+    }
+    return null;
+  }
+
+  _switchRoom(idx) {
+    if (!this._rooms || idx === this._currentRoomIdx) return;
+    this._switching = true;
+    this._disconnectAllMulti();
+    clearTimeout(this._autoSyncTimer); this._autoSyncTimer = null;
+
+    // Close current WS connections
+    if (this._mainWs) { try { this._mainWs.onclose = null; this._mainWs.close(); } catch {} this._mainWs = null; }
+    if (this._spkWs) { try { this._spkWs.onclose = null; this._spkWs.close(); } catch {} this._spkWs = null; }
+    this._stopSpkHeartbeat();
+    this._mainWsConnected = false;
+
+    this._currentRoomIdx = idx;
+    this._lsSet("roomIdx", idx);
+
+    // Apply new room's entity or host
+    const room = this._rooms[idx];
+    if (room.entity) {
+      this._config.entity = room.entity;
+      this._lastEntityRef = null;
+    }
+    const info = this._getRoomHost(idx);
+    if (info) {
+      this._deviceHost = info.host;
+      this._deviceSpkPort = info.spkPort;
+      this._deviceAiboxPort = info.aiboxPort;
+      this._connectMainWs();
+      this._connectSpkWs();
+    }
+
+    this._syncGen++;
+    this._syncInProgress = false;
+    this._switching = false;
+
+    // Reconnect synced rooms
+    setTimeout(() => {
+      this._syncRoomIdxs.forEach(sidx => {
+        if (sidx !== this._currentRoomIdx) this._connectMultiRoom(sidx);
+      });
+    }, 500);
+
+    this._veGiaoDien();
+  }
+
+  _connectMultiRoom(idx) {
+    if (!this._rooms || idx === this._currentRoomIdx) return;
+    const existing = this._multiWs[idx];
+    if (existing) {
+      if (existing.ws?.readyState === 0 || existing.ws?.readyState === 1) return;
+      this._disconnectMultiRoom(idx);
+    }
+    const info = this._getRoomHost(idx);
+    if (!info) return;
+    const entry = { ws: null, spkWs: null, reconnectTimer: null, connected: false, pollTimer: null };
+    this._multiWs[idx] = entry;
+
+    // AiboxPlus WS (port 8082)
+    try {
+      const ws = new WebSocket(`ws://${info.host}:${info.aiboxPort}`);
+      entry.ws = ws;
+      ws.onopen = () => {
+        entry.connected = true;
+        entry.pollTimer = setInterval(() => {
+          if (ws.readyState === 1) ws.send(JSON.stringify({ action: "get_info" }));
+        }, 5000);
+        ws.send(JSON.stringify({ action: "get_info" }));
+        // Sync volume
+        setTimeout(() => {
+          if (ws.readyState === 1) this._sendVolumeToRoom(idx, Math.round(this._volumeLevel * 15));
+        }, 500);
+        delete this._roomVolumes[idx];
+        this._renderSyncBar();
+        this._renderRoomVolumeSliders();
+      };
+      ws.onmessage = (ev) => {
+        try {
+          const d = JSON.parse(ev.data);
+          const vol = (() => {
+            if (d.type === "volume_state" && d.volume !== undefined) return Number(d.volume);
+            if (d.type === "get_info" && d.data) { const v = d.data.vol ?? d.data.volume; if (v !== undefined) return Number(v); }
+            if (d.type === "playback_state" && d.volume !== undefined) return Number(d.volume);
+            if (d.vol !== undefined) return Number(d.vol);
+            return null;
+          })();
+          if (vol !== null && vol !== this._roomVolumes[idx]) {
+            if (this[`_rvGuardUntil_${idx}`] && Date.now() < this[`_rvGuardUntil_${idx}`]) return;
+            this._roomVolumes[idx] = vol;
+            const sl = this.shadowRoot?.querySelector(`.room-vol-slider[data-rvidx="${idx}"]`);
+            if (sl) { sl.value = vol; const lbl = this.shadowRoot?.querySelector(`#rvl_${idx}`); if (lbl) lbl.textContent = vol; }
+          }
+          if (d.type === "playback_state" && d.title) {
+            this._roomPlayback[idx] = { title: d.title || "", artist: d.artist || d.channel || "", isPlaying: !!d.is_playing, source: d.source || "" };
+            const badge = this.shadowRoot?.querySelector(`.sync-room-badge[data-srbidx="${idx}"]`);
+            if (badge && d.title) badge.title = d.title;
+          }
+        } catch {}
+      };
+      ws.onclose = () => {
+        entry.connected = false;
+        if (entry.pollTimer) { clearInterval(entry.pollTimer); entry.pollTimer = null; }
+        this._renderSyncBar();
+        this._renderRoomVolumeSliders();
+        if (this._syncRoomIdxs.has(idx) && !this._switching) {
+          entry.reconnectTimer = setTimeout(() => { delete this._multiWs[idx]; if (this._syncRoomIdxs.has(idx)) this._connectMultiRoom(idx); }, 3000 + Math.random() * 3000);
+        }
+      };
+      ws.onerror = () => {};
+    } catch {}
+
+    // Speaker WS (port 8080)
+    try {
+      const spkWs = new WebSocket(`ws://${info.host}:${info.spkPort}`);
+      entry.spkWs = spkWs;
+      spkWs.onopen = () => { if (spkWs.readyState === 1) spkWs.send(JSON.stringify({ type: "get_info" })); };
+      spkWs.onmessage = (ev) => {
+        try {
+          const d = JSON.parse(ev.data);
+          let s = d;
+          if (typeof d.data === "string") { try { s = JSON.parse(d.data); } catch { s = d; } }
+          else if (d.data) s = d.data;
+          const vol = s.vol !== undefined ? Number(s.vol) : null;
+          if (vol !== null && vol !== this._roomVolumes[idx]) {
+            if (this[`_rvGuardUntil_${idx}`] && Date.now() < this[`_rvGuardUntil_${idx}`]) return;
+            this._roomVolumes[idx] = vol;
+            const sl = this.shadowRoot?.querySelector(`.room-vol-slider[data-rvidx="${idx}"]`);
+            if (sl) { sl.value = vol; const lbl = this.shadowRoot?.querySelector(`#rvl_${idx}`); if (lbl) lbl.textContent = vol; }
+          }
+        } catch {}
+      };
+      spkWs.onclose = () => {
+        if (entry.spkWs === spkWs) entry.spkWs = null;
+        if (this._syncRoomIdxs.has(idx) && !this._switching) {
+          setTimeout(() => {
+            if (!this._syncRoomIdxs.has(idx) || this._switching) return;
+            const ri = this._getRoomHost(idx); if (!ri) return;
+            try { const nw = new WebSocket(`ws://${ri.host}:${ri.spkPort}`); entry.spkWs = nw; nw.onopen = () => { nw.send(JSON.stringify({ type: "get_info" })); }; nw.onmessage = spkWs.onmessage; nw.onclose = spkWs.onclose; nw.onerror = () => {}; } catch {}
+          }, 3500 + Math.random() * 2500);
+        }
+      };
+      spkWs.onerror = () => {};
+    } catch {}
+    this._renderSyncBar();
+    this._renderRoomVolumeSliders();
+  }
+
+  _disconnectMultiRoom(idx) {
+    const entry = this._multiWs[idx]; if (!entry) return;
+    clearTimeout(entry.reconnectTimer);
+    if (entry.pollTimer) { clearInterval(entry.pollTimer); entry.pollTimer = null; }
+    try { if (entry.ws) { entry.ws.onclose = null; entry.ws.onerror = null; entry.ws.onmessage = null; entry.ws.close(); } } catch {}
+    try { if (entry.spkWs) { entry.spkWs.onclose = null; entry.spkWs.onerror = null; entry.spkWs.close(); } } catch {}
+    delete this._multiWs[idx];
+  }
+
+  _disconnectAllMulti() {
+    Object.keys(this._multiWs).forEach(idx => this._disconnectMultiRoom(parseInt(idx)));
+  }
+
+  _getSyncTargets() {
+    if (!this._rooms) return [];
+    return Array.from(this._syncRoomIdxs).filter(i => i !== this._currentRoomIdx);
+  }
+
+  _sendToRoom(idx, obj) {
+    const entry = this._multiWs[idx];
+    if (entry?.ws?.readyState === 1) entry.ws.send(JSON.stringify(obj));
+  }
+
+  _sendSpkToRoom(idx, obj) {
+    const entry = this._multiWs[idx];
+    if (entry?.spkWs?.readyState === 1) entry.spkWs.send(JSON.stringify(obj));
+    else this._sendToRoom(idx, obj);
+  }
+
+  _broadcastCmd(obj) {
+    this._sendWs(obj);
+    const targets = this._getSyncTargets();
+    const a = obj?.action;
+    if (a === "play_song" || a === "play_zing" || a === "play_url" || a === "playlist_play") {
+      targets.forEach((idx, i) => { setTimeout(() => { if (!this._switching) this._sendToRoom(idx, obj); }, i * 300); });
+    } else {
+      targets.forEach(idx => this._sendToRoom(idx, obj));
+    }
+  }
+
+  _broadcastSpkCmd(obj) {
+    this._sendSpkWs(obj);
+    this._getSyncTargets().forEach(idx => this._sendSpkToRoom(idx, obj));
+  }
+
+  _sendVolumeToRoom(idx, vol) {
+    if (idx === this._currentRoomIdx) return;
+    const entry = this._multiWs[idx]; if (!entry) return;
+    if (entry.spkWs?.readyState === 1) {
+      entry.spkWs.send(JSON.stringify({ type: "set_vol", vol }));
+      entry.spkWs.send(JSON.stringify({ type: "send_message", what: 4, arg1: 5, arg2: vol }));
+    }
+    if (entry.ws?.readyState === 1) {
+      entry.ws.send(JSON.stringify({ action: "set_volume", value: vol }));
+      entry.ws.send(JSON.stringify({ type: "set_vol", vol }));
+    }
+  }
+
+  // ── Sync Playback ──
+
+  _syncPlaybackTime(silent = false) {
+    const targets = this._getSyncTargets();
+    if (!targets.length) return;
+    if (this._syncInProgress) return;
+    this._syncInProgress = true;
+    const PAUSE_SETTLE = this._config.sync_pause_ms || 400;
+    const RESUME_DELAY = this._config.sync_resume_delay_ms || 3000;
+    const pos = this._livePositionSeconds || 0;
+    const wasPlaying = this._livePlaying;
+    const roomNames = targets.map(i => this._rooms[i].name).join(", ");
+    const gen = ++this._syncGen;
+    const aborted = () => gen !== this._syncGen || this._switching;
+
+    // Pause all
+    this._broadcastCmd({ action: "pause" });
+    this._broadcastSpkCmd({ type: "send_message", what: 65536, arg1: 0, arg2: 0, obj: "pause" });
+
+    setTimeout(() => {
+      if (aborted()) { this._syncInProgress = false; return; }
+      // Seek all
+      this._sendWs({ action: "seek", position: pos });
+      targets.forEach(idx => this._sendToRoom(idx, { action: "seek", position: pos }));
+
+      setTimeout(() => {
+        if (aborted()) { this._syncInProgress = false; return; }
+        if (wasPlaying) {
+          this._syncSuppressUntil = Date.now() + 8000;
+          this._broadcastCmd({ action: "resume" });
+        }
+        this._syncInProgress = false;
+        this._renderSyncBar();
+      }, RESUME_DELAY);
+    }, PAUSE_SETTLE);
+  }
+
+  _scheduleAutoSync() {
+    if (!this._autoSync) return;
+    if (!this._getSyncTargets().length) return;
+    if (Date.now() < this._syncSuppressUntil) return;
+    const playback = this._thongTinPhat();
+    const songTitle = playback?.title || "";
+    if (this._autoSyncDoneForSong && this._lastSyncSongTitle === songTitle) return;
+    clearTimeout(this._autoSyncTimer);
+    this._autoSyncTimer = setTimeout(() => {
+      if (this._livePlaying && this._getSyncTargets().length && !this._syncInProgress) {
+        const currentTitle = this._thongTinPhat()?.title || "";
+        if (this._autoSyncDoneForSong && this._lastSyncSongTitle === currentTitle) return;
+        this._autoSyncDoneForSong = true;
+        this._lastSyncSongTitle = currentTitle;
+        this._syncPlaybackTime(true);
+      }
+    }, this._config.auto_sync_delay_ms || 5000);
+  }
+
+  _toggleAutoSync() {
+    this._autoSync = !this._autoSync;
+    this._lsSet("autoSync", this._autoSync);
+    clearTimeout(this._autoSyncTimer); this._autoSyncTimer = null;
+    if (this._autoSync && this._livePlaying) this._scheduleAutoSync();
+    if (!this._autoSync) this._autoSyncDoneForSong = false;
+    this._renderSyncBar();
+  }
+
+  _renderSyncBar() {
+    const bar = this.shadowRoot?.querySelector("#syncBar"); if (!bar) return;
+    const targets = this._getSyncTargets();
+    if (!this._rooms || this._rooms.length < 2 || targets.length === 0) { bar.style.display = "none"; return; }
+    bar.style.display = "";
+    bar.innerHTML = `
+      <div class="sync-bar-inner">
+        <div class="sync-bar-left">
+          <span class="sync-bar-label">SYNC</span>
+          ${targets.map(idx => {
+            const ok = this._multiWs[idx]?.connected;
+            const rp = this._roomPlayback[idx];
+            return `<span class="sync-room-badge ${ok ? "ok" : "pending"}" data-srbidx="${idx}" title="${this._maHoaHtml(rp?.title || "")}">
+              ${this._maHoaHtml(this._rooms[idx].name)}${rp?.isPlaying ? " ▶" : ""}
+            </span>`;
+          }).join("")}
+        </div>
+        <div class="sync-bar-right">
+          <button class="sync-btn${this._syncInProgress ? " sync-btn-busy" : ""}" id="btnSyncNow" ${this._syncInProgress ? "disabled" : ""}>
+            ${this._syncInProgress ? "Syncing..." : "Sync Now"}
+          </button>
+          <button class="sync-btn ${this._autoSync ? "sync-auto-on" : ""}" id="btnAutoSync">
+            ${this._autoSync ? "Auto ON" : "Auto"}
+          </button>
+          <button class="sync-btn" id="btnSyncSettings">⚙</button>
+        </div>
+      </div>
+      <div id="syncSettingsPanel" class="${this._syncSettingsOpen ? "" : "hidden"}" style="border-top:1px solid rgba(122,99,255,.15);margin-top:6px;padding-top:8px">
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <div style="flex:1;min-width:90px">
+            <div style="font-size:9px;color:var(--muted);margin-bottom:3px">Chờ trước auto-sync</div>
+            <div style="display:flex;align-items:center;gap:4px">
+              <input type="range" class="sync-slider" id="slAutoDelay" min="1000" max="15000" step="500" value="${this._config.auto_sync_delay_ms}" style="flex:1" />
+              <span id="autoDelayVal" style="font-size:10px;color:var(--accent);min-width:32px;text-align:right">${((this._config.auto_sync_delay_ms || 5000) / 1000).toFixed(1)}s</span>
+            </div>
+          </div>
+          <div style="flex:1;min-width:90px">
+            <div style="font-size:9px;color:var(--muted);margin-bottom:3px">Pause settle</div>
+            <div style="display:flex;align-items:center;gap:4px">
+              <input type="range" class="sync-slider" id="slPauseMs" min="100" max="2000" step="50" value="${this._config.sync_pause_ms}" style="flex:1" />
+              <span id="pauseMsVal" style="font-size:10px;color:var(--accent);min-width:32px;text-align:right">${this._config.sync_pause_ms || 400}ms</span>
+            </div>
+          </div>
+          <div style="flex:1;min-width:90px">
+            <div style="font-size:9px;color:var(--muted);margin-bottom:3px">Resume delay</div>
+            <div style="display:flex;align-items:center;gap:4px">
+              <input type="range" class="sync-slider" id="slResumeDelay" min="500" max="8000" step="250" value="${this._config.sync_resume_delay_ms}" style="flex:1" />
+              <span id="resumeDelayVal" style="font-size:10px;color:var(--accent);min-width:32px;text-align:right">${((this._config.sync_resume_delay_ms || 3000) / 1000).toFixed(1)}s</span>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    const syncNow = bar.querySelector("#btnSyncNow");
+    if (syncNow) syncNow.onclick = () => this._syncPlaybackTime(false);
+    const autoBtn = bar.querySelector("#btnAutoSync");
+    if (autoBtn) autoBtn.onclick = () => this._toggleAutoSync();
+    const settingsBtn = bar.querySelector("#btnSyncSettings");
+    if (settingsBtn) settingsBtn.onclick = () => { this._syncSettingsOpen = !this._syncSettingsOpen; this._renderSyncBar(); };
+    const slAutoDelay = bar.querySelector("#slAutoDelay");
+    if (slAutoDelay) slAutoDelay.oninput = () => { this._config.auto_sync_delay_ms = parseInt(slAutoDelay.value); const v = bar.querySelector("#autoDelayVal"); if (v) v.textContent = (this._config.auto_sync_delay_ms / 1000).toFixed(1) + "s"; };
+    const slPauseMs = bar.querySelector("#slPauseMs");
+    if (slPauseMs) slPauseMs.oninput = () => { this._config.sync_pause_ms = parseInt(slPauseMs.value); const v = bar.querySelector("#pauseMsVal"); if (v) v.textContent = this._config.sync_pause_ms + "ms"; };
+    const slResumeDelay = bar.querySelector("#slResumeDelay");
+    if (slResumeDelay) slResumeDelay.oninput = () => { this._config.sync_resume_delay_ms = parseInt(slResumeDelay.value); const v = bar.querySelector("#resumeDelayVal"); if (v) v.textContent = (this._config.sync_resume_delay_ms / 1000).toFixed(1) + "s"; };
+  }
+
+  _renderRoomVolumeSliders() {
+    const container = this.shadowRoot?.querySelector("#roomVolumes"); if (!container) return;
+    const targets = this._getSyncTargets();
+    if (!this._rooms || this._rooms.length < 2 || targets.length === 0) { container.style.display = "none"; return; }
+    const allRooms = [this._currentRoomIdx, ...targets];
+    container.style.display = "";
+    container.innerHTML = allRooms.map(idx => {
+      const room = this._rooms[idx];
+      const color = ROOM_COLORS[idx % ROOM_COLORS.length];
+      const isMaster = idx === this._currentRoomIdx;
+      const vol = isMaster ? Math.round(this._volumeLevel * 15) : (this._roomVolumes[idx] ?? 7);
+      return `<div class="room-vol-row" data-rvidx="${idx}">
+        <span class="room-vol-dot" style="background:${color}"></span>
+        <span class="room-vol-name" style="color:${color}">${this._maHoaHtml(room.name)}${isMaster ? " ★" : ""}</span>
+        <input type="range" class="room-vol-slider" min="0" max="15" value="${vol}" data-rvidx="${idx}" style="--rv-color:${color}" />
+        <span class="room-vol-label" id="rvl_${idx}">${vol}</span>
+      </div>`;
+    }).join("");
+    container.querySelectorAll(".room-vol-slider").forEach(sl => {
+      sl.oninput = () => {
+        const ridx = parseInt(sl.dataset.rvidx);
+        const v = parseInt(sl.value);
+        const lbl = container.querySelector(`#rvl_${ridx}`); if (lbl) lbl.textContent = v;
+        if (ridx === this._currentRoomIdx) {
+          this._volumeLevel = v / 15;
+          clearTimeout(this._volSendTimer);
+          this._volSendTimer = setTimeout(() => {
+            this._goiDichVu("media_player", "volume_set", { volume_level: this._volumeLevel });
+          }, 100);
+        } else {
+          this._roomVolumes[ridx] = v;
+          this[`_rvGuardUntil_${ridx}`] = Date.now() + 3000;
+          clearTimeout(this[`_rvTimer_${ridx}`]);
+          this[`_rvTimer_${ridx}`] = setTimeout(() => { this._sendVolumeToRoom(ridx, v); }, 100);
+        }
+      };
+    });
+  }
+
+  _renderRoomPills() {
+    const bar = this.shadowRoot?.querySelector("#roomBar"); if (!bar || !this._rooms) return;
+    bar.querySelectorAll(".room-pill").forEach((pill, i) => {
+      pill.classList.toggle("active", i === this._currentRoomIdx);
+    });
+    bar.querySelectorAll(".sync-cb").forEach(cb => {
+      cb.checked = this._syncRoomIdxs.has(parseInt(cb.dataset.sidx));
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -5838,6 +6381,32 @@ class PhicommR1Card extends HTMLElement {
   _ganSuKien() {
     const root = this.shadowRoot;
     if (!root) return;
+
+    // ── Room pills + Sync checkboxes ──
+    if (this._rooms) {
+      root.querySelectorAll(".room-pill").forEach(pill => {
+        pill.addEventListener("click", () => this._switchRoom(parseInt(pill.dataset.ridx)));
+      });
+      root.querySelectorAll(".sync-cb").forEach(cb => {
+        cb.addEventListener("change", () => {
+          const idx = parseInt(cb.dataset.sidx);
+          if (cb.checked) {
+            this._syncRoomIdxs.add(idx);
+            this._connectMultiRoom(idx);
+            const label = cb.closest(".sync-cb-label");
+            if (label) { label.classList.add("synced"); const icon = label.querySelector(".sync-cb-icon"); if (icon) icon.textContent = "🔗"; }
+          } else {
+            this._syncRoomIdxs.delete(idx);
+            this._disconnectMultiRoom(idx);
+            const label = cb.closest(".sync-cb-label");
+            if (label) { label.classList.remove("synced"); const icon = label.querySelector(".sync-cb-icon"); if (icon) icon.textContent = "⭕"; }
+          }
+          this._lsSet("syncIdxs", Array.from(this._syncRoomIdxs));
+          this._renderSyncBar();
+          this._renderRoomVolumeSliders();
+        });
+      });
+    }
 
     root.querySelectorAll("[data-tab]").forEach((el) => {
       el.addEventListener("click", () => {
