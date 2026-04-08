@@ -1067,7 +1067,7 @@ class PhicommR1Card extends HTMLElement {
     const ai = attrs.custom_ai || {};
     const volumeLevel = attrs.volume_level;
 
-    if (typeof volumeLevel === "number") {
+    if (typeof volumeLevel === "number" && !this._wsVolDragging && Date.now() > this._wsVolGuardUntil) {
       this._volumeLevel = Math.max(0, Math.min(1, volumeLevel));
     }
     const sensitivity = this._epKieuSo(
@@ -6603,9 +6603,14 @@ class PhicommR1Card extends HTMLElement {
     if (volumeSlider) {
       volumeSlider.addEventListener("input", (ev) => {
         this._volumeLevel = Number(ev.target.value) / 100;
+        this._wsVolDragging = true;
+        clearTimeout(this._volDragTimer);
       });
       volumeSlider.addEventListener("change", async (ev) => {
         this._volumeLevel = Number(ev.target.value) / 100;
+        this._wsVolGuardUntil = Date.now() + 3000;
+        clearTimeout(this._volDragTimer);
+        this._volDragTimer = setTimeout(() => { this._wsVolDragging = false; }, 2000);
         await this._goiDichVu("media_player", "volume_set", {
           volume_level: this._volumeLevel,
         });
