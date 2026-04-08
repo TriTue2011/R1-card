@@ -337,10 +337,13 @@ class PhicommR1Card extends HTMLElement {
       !this._pendingRender
     ) return;
 
-    // When WS is connected and only entity changed (not search/playlist),
-    // skip re-render — WS provides real-time data directly to DOM
+    // When WS is connected and only entity polling changed (not search/playlist),
+    // defer re-render to avoid destroying active inputs
     if (this._mainWsConnected && changed && !searchChanged && !playlistLibraryChanged && !playlistDetailChanged && !playlistEventChanged && !this._pendingRender) {
-      return;
+      if (this._dangSuaOInputVanBan()) {
+        this._pendingRender = true;
+        return;
+      }
     }
     if (this._activeTab === "system" && this._dangTuongTacEq()) {
       this._pendingRender = true;
@@ -1062,7 +1065,7 @@ class PhicommR1Card extends HTMLElement {
     const ai = attrs.custom_ai || {};
     const volumeLevel = attrs.volume_level;
 
-    if (typeof volumeLevel === "number" && !this._mainWsConnected) {
+    if (typeof volumeLevel === "number") {
       this._volumeLevel = Math.max(0, Math.min(1, volumeLevel));
     }
     const sensitivity = this._epKieuSo(
@@ -5703,7 +5706,7 @@ class PhicommR1Card extends HTMLElement {
         ws.send(JSON.stringify({ action: "get_info" }));
         // Sync volume
         setTimeout(() => {
-          if (ws.readyState === 1) this._sendVolumeToRoom(idx, Math.round(this._volumeLevel * 15));
+          if (ws.readyState === 1) { const vm = this._thuocTinh().volume_max || 15; this._sendVolumeToRoom(idx, Math.round(this._volumeLevel * vm)); }
         }, 500);
         delete this._roomVolumes[idx];
         this._renderSyncBar();
@@ -5980,11 +5983,12 @@ class PhicommR1Card extends HTMLElement {
       const room = this._rooms[idx];
       const color = ROOM_COLORS[idx % ROOM_COLORS.length];
       const isMaster = idx === this._currentRoomIdx;
-      const vol = isMaster ? Math.round(this._volumeLevel * 15) : (this._roomVolumes[idx] ?? 7);
+      const vMax = this._thuocTinh().volume_max || 15;
+      const vol = isMaster ? Math.round(this._volumeLevel * vMax) : (this._roomVolumes[idx] ?? Math.round(vMax / 2));
       return `<div class="room-vol-row" data-rvidx="${idx}">
         <span class="room-vol-dot" style="background:${color}"></span>
         <span class="room-vol-name" style="color:${color}">${this._maHoaHtml(room.name)}${isMaster ? " ★" : ""}</span>
-        <input type="range" class="room-vol-slider" min="0" max="15" value="${vol}" data-rvidx="${idx}" style="--rv-color:${color}" />
+        <input type="range" class="room-vol-slider" min="0" max="${vMax}" value="${vol}" data-rvidx="${idx}" style="--rv-color:${color}" />
         <span class="room-vol-label" id="rvl_${idx}">${vol}</span>
       </div>`;
     }).join("");
@@ -5994,7 +5998,8 @@ class PhicommR1Card extends HTMLElement {
         const v = parseInt(sl.value);
         const lbl = container.querySelector(`#rvl_${ridx}`); if (lbl) lbl.textContent = v;
         if (ridx === this._currentRoomIdx) {
-          this._volumeLevel = v / 15;
+          const vm = this._thuocTinh().volume_max || 15;
+          this._volumeLevel = v / vm;
           clearTimeout(this._volSendTimer);
           this._volSendTimer = setTimeout(() => {
             this._goiDichVu("media_player", "volume_set", { volume_level: this._volumeLevel });
@@ -6309,7 +6314,8 @@ class PhicommR1Card extends HTMLElement {
     if (!this._wsVolDragging && Date.now() > this._wsVolGuardUntil) {
       const vol = s.vol !== undefined ? Number(s.vol) : null;
       if (vol !== null) {
-        this._volumeLevel = Math.max(0, Math.min(1, vol / 15));
+        const volMax = this._thuocTinh().volume_max || 15;
+        this._volumeLevel = Math.max(0, Math.min(1, vol / volMax));
         if (this._activeTab === "media") {
           const slider = this.shadowRoot?.getElementById("media-volume");
           if (slider) slider.value = Math.round(this._volumeLevel * 100);
