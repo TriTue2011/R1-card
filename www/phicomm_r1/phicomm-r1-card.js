@@ -583,10 +583,15 @@ class PhicommR1Card extends HTMLElement {
   }
 
   _dangSuaOInputVanBan() {
+    // Block re-render when any dialog is open (even without focused input)
+    if (this._playlistDialog?.open) return true;
+    if (this._alarmDialogOpen) return true;
+    if (this._wifiPasswordDialog) return true;
+    if (this._syncSettingsOpen) return true;
     const active = this.shadowRoot?.activeElement;
     if (this._mediaQueryFocused) return true;
     if (!active) return false;
-    if (active.tagName === "INPUT" || active.tagName === "TEXTAREA") return true;
+    if (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT") return true;
     return false;
   }
 
@@ -5611,7 +5616,6 @@ class PhicommR1Card extends HTMLElement {
       // HA service fallback (works on domain/HTTPS)
       await this._goiDichVu("phicomm_r1", "wake_word_get_enabled").catch(() => {});
       await this._goiDichVu("phicomm_r1", "get_voice").catch(() => {});
-      await this._goiDichVu("phicomm_r1", "get_live2d").catch(() => {});
       await this._goiDichVu("phicomm_r1", "alarm_list").catch(() => {});
       await this._goiDichVu("phicomm_r1", "led_get_state").catch(() => {});
       await this._lamMoiEntity(250, 2);
@@ -5633,6 +5637,12 @@ class PhicommR1Card extends HTMLElement {
       if (this._spkWs?.readyState === 1) {
         this._spkWs.send(JSON.stringify({ type: "get_device_info" }));
       }
+      // HA service fallbacks (works on domain/HTTPS)
+      await this._goiDichVu("phicomm_r1", "mac_get").catch(() => {});
+      await this._goiDichVu("phicomm_r1", "ota_get").catch(() => {});
+      await this._goiDichVu("phicomm_r1", "hass_get").catch(() => {});
+      await this._goiDichVu("phicomm_r1", "wifi_get_status").catch(() => {});
+      await this._goiDichVu("phicomm_r1", "get_system_info").catch(() => {});
       await this._goiDichVu("phicomm_r1", "refresh_state").catch(() => {});
       await this._lamMoiEntity(250, 2);
     } catch (err) {
@@ -6171,6 +6181,8 @@ class PhicommR1Card extends HTMLElement {
     const d = { type: "send_message", what: 4, arg1, arg2 };
     if (obj !== undefined) d.obj = String(obj);
     this._sendSpkWs(d);
+    // HA service fallback for HTTPS/domain access
+    this._goiDichVu("phicomm_r1", "send_message", { what: 4, arg1, arg2 }).catch(() => {});
   }
 
   _wsRequestInitial() {
@@ -7039,6 +7051,7 @@ class PhicommR1Card extends HTMLElement {
         this._bassEnabled = Boolean(ev.target.checked);
         this._wsGuardAudio = Date.now();
         this._sendSpkWs({ type: "set_bass_enable", enable: this._bassEnabled });
+        this._goiDichVu("phicomm_r1", "set_bass_enable", { enabled: this._bassEnabled }).catch(() => {});
       });
     }
 
@@ -7051,6 +7064,7 @@ class PhicommR1Card extends HTMLElement {
         this._bassStrength = Number(ev.target.value);
         this._wsGuardAudio = Date.now();
         this._sendSpkWs({ type: "set_bass_strength", strength: parseInt(this._bassStrength) });
+        this._goiDichVu("phicomm_r1", "set_bass_strength", { strength: parseInt(this._bassStrength) }).catch(() => {});
       });
     }
 
@@ -7060,6 +7074,7 @@ class PhicommR1Card extends HTMLElement {
         this._loudnessEnabled = Boolean(ev.target.checked);
         this._wsGuardAudio = Date.now();
         this._sendSpkWs({ type: "set_loudness_enable", enable: this._loudnessEnabled });
+        this._goiDichVu("phicomm_r1", "set_loudness_enable", { enabled: this._loudnessEnabled }).catch(() => {});
       });
     }
 
@@ -7072,6 +7087,7 @@ class PhicommR1Card extends HTMLElement {
         this._loudnessGain = Number(ev.target.value);
         this._wsGuardAudio = Date.now();
         this._sendSpkWs({ type: "set_loudness_gain", gain: parseInt(this._loudnessGain) });
+        this._goiDichVu("phicomm_r1", "set_loudness_gain", { gain: parseInt(this._loudnessGain) }).catch(() => {});
       });
     }
 
@@ -7095,6 +7111,7 @@ class PhicommR1Card extends HTMLElement {
         this._mainLightBrightness = Number(ev.target.value);
         this._wsGuardCtrl = Date.now();
         this._sendSpkMsg(65, this._mainLightBrightness);
+        this._goiDichVu("phicomm_r1", "set_light_brightness", { brightness: this._mainLightBrightness }).catch(() => {});
       });
     }
 
@@ -7107,6 +7124,7 @@ class PhicommR1Card extends HTMLElement {
         this._mainLightSpeed = Number(ev.target.value);
         this._wsGuardCtrl = Date.now();
         this._sendSpkMsg(66, this._mainLightSpeed);
+        this._goiDichVu("phicomm_r1", "set_light_speed", { speed: this._mainLightSpeed }).catch(() => {});
       });
     }
 
@@ -7116,6 +7134,7 @@ class PhicommR1Card extends HTMLElement {
         this._mainLightMode = mode;
         this._wsGuardCtrl = Date.now();
         this._sendSpkMsg(67, mode);
+        this._goiDichVu("phicomm_r1", "set_light_mode", { mode }).catch(() => {});
         this._veGiaoDien();
       });
     });
@@ -7237,6 +7256,7 @@ class PhicommR1Card extends HTMLElement {
         this._dacBassVol = Number(ev.target.value);
         this._wsGuardAudio = Date.now();
         this._sendSpkWs({ type: "sends", list: [{ type: "setMixerValue", controlName: "DAC Digital Volume L", value: String(this._dacBassVol) }, { type: "get_eq_config" }] });
+        this._goiDichVu("phicomm_r1", "set_mixer_value", { control_name: "DAC Digital Volume L", value: this._dacBassVol }).catch(() => {});
       });
     }
     const dacHighVol = root.getElementById("dac-high-vol");
@@ -7250,6 +7270,7 @@ class PhicommR1Card extends HTMLElement {
         this._dacHighVol = Number(ev.target.value);
         this._wsGuardAudio = Date.now();
         this._sendSpkWs({ type: "sends", list: [{ type: "setMixerValue", controlName: "DAC Digital Volume R", value: String(this._dacHighVol) }, { type: "get_eq_config" }] });
+        this._goiDichVu("phicomm_r1", "set_mixer_value", { control_name: "DAC Digital Volume R", value: this._dacHighVol }).catch(() => {});
       });
     }
 
@@ -7265,13 +7286,15 @@ class PhicommR1Card extends HTMLElement {
     }
     const alarmRefresh = root.getElementById("alarm-refresh");
     if (alarmRefresh) {
-      alarmRefresh.addEventListener("click", () => {
+      alarmRefresh.addEventListener("click", async () => {
         this._sendWs({ action: "alarm_list" });
+        await this._goiDichVu("phicomm_r1", "alarm_list").catch(() => {});
+        await this._lamMoiEntity(250, 2);
       });
     }
     const alarmSave = root.getElementById("alarm-save");
     if (alarmSave) {
-      alarmSave.addEventListener("click", () => {
+      alarmSave.addEventListener("click", async () => {
         const h = Number(root.getElementById("alarm-hour")?.value || 7);
         const m = Number(root.getElementById("alarm-minute")?.value || 0);
         const rep = root.getElementById("alarm-repeat")?.value || "";
@@ -7279,6 +7302,8 @@ class PhicommR1Card extends HTMLElement {
         this._sendWs({ action: "alarm_add", hour: h, minute: m, repeat: rep, days: days });
         this._alarmDialogOpen = false;
         this._veGiaoDien();
+        await this._goiDichVu("phicomm_r1", "alarm_add", { hour: h, minute: m, repeat: rep, days: days }).catch(() => {});
+        await this._lamMoiEntity(250, 2);
       });
     }
     const alarmCancel = root.getElementById("alarm-cancel");
@@ -7289,17 +7314,21 @@ class PhicommR1Card extends HTMLElement {
       });
     }
     root.querySelectorAll(".alarm-toggle").forEach((el) => {
-      el.addEventListener("change", (ev) => {
+      el.addEventListener("change", async (ev) => {
         const id = el.dataset.alarmId;
         const enabled = Boolean(ev.target.checked);
         this._sendWs({ action: "alarm_toggle", alarm_id: id, enabled });
+        await this._goiDichVu("phicomm_r1", "alarm_toggle", { alarm_id: id, enabled }).catch(() => {});
+        await this._lamMoiEntity(250);
       });
     });
     root.querySelectorAll(".alarm-delete").forEach((el) => {
-      el.addEventListener("click", () => {
+      el.addEventListener("click", async () => {
         const id = el.dataset.alarmId;
         if (!confirm("Xóa báo thức này?")) return;
         this._sendWs({ action: "alarm_delete", alarm_id: id });
+        await this._goiDichVu("phicomm_r1", "alarm_delete", { alarm_id: id }).catch(() => {});
+        await this._lamMoiEntity(250, 2);
       });
     });
 
@@ -7309,6 +7338,7 @@ class PhicommR1Card extends HTMLElement {
       tiktokToggle.addEventListener("click", () => {
         this._tiktokReply = !this._tiktokReply;
         this._sendWs({ action: "tiktok_reply_toggle", enabled: this._tiktokReply });
+        this._goiDichVu("phicomm_r1", "set_tiktok_reply", { enabled: this._tiktokReply }).catch(() => {});
         this._veGiaoDien();
       });
     }
@@ -7316,42 +7346,62 @@ class PhicommR1Card extends HTMLElement {
     // --- System Info ---
     const sysInfoRefresh = root.getElementById("sys-info-refresh");
     if (sysInfoRefresh) {
-      sysInfoRefresh.addEventListener("click", () => {
+      sysInfoRefresh.addEventListener("click", async () => {
         if (this._spkWs?.readyState === 1) {
           this._spkWs.send(JSON.stringify({ type: "get_device_info" }));
         }
         this._sendWs({ action: "get_info" });
+        await this._goiDichVu("phicomm_r1", "get_system_info").catch(() => {});
+        await this._lamMoiEntity(250, 2);
       });
     }
 
     // --- MAC Address ---
     const macGet = root.getElementById("mac-get");
     if (macGet) {
-      macGet.addEventListener("click", () => { this._sendWs({ action: "mac_get" }); });
+      macGet.addEventListener("click", async () => {
+        this._sendWs({ action: "mac_get" });
+        await this._goiDichVu("phicomm_r1", "mac_get").catch(() => {});
+        await this._lamMoiEntity(250, 2);
+      });
     }
     const macRandom = root.getElementById("mac-random");
     if (macRandom) {
-      macRandom.addEventListener("click", () => {
+      macRandom.addEventListener("click", async () => {
         if (!confirm("Random MAC sẽ có thể mất quyền. Tiếp tục?")) return;
         this._sendWs({ action: "mac_random" });
+        await this._goiDichVu("phicomm_r1", "mac_random").catch(() => {});
+        await this._lamMoiEntity(250, 2);
       });
     }
     const macRestore = root.getElementById("mac-restore");
     if (macRestore) {
-      macRestore.addEventListener("click", () => { this._sendWs({ action: "mac_clear" }); });
+      macRestore.addEventListener("click", async () => {
+        this._sendWs({ action: "mac_clear" });
+        await this._goiDichVu("phicomm_r1", "mac_restore").catch(() => {});
+        await this._lamMoiEntity(250, 2);
+      });
     }
 
     // --- OTA ---
     const otaRefresh = root.getElementById("ota-refresh");
     if (otaRefresh) {
-      otaRefresh.addEventListener("click", () => { this._sendWs({ action: "ota_get" }); });
+      otaRefresh.addEventListener("click", async () => {
+        this._sendWs({ action: "ota_get" });
+        await this._goiDichVu("phicomm_r1", "ota_get").catch(() => {});
+        await this._lamMoiEntity(250, 2);
+      });
     }
     const otaSave = root.getElementById("ota-save");
     if (otaSave) {
-      otaSave.addEventListener("click", () => {
+      otaSave.addEventListener("click", async () => {
         const sel = root.getElementById("ota-sel");
         const url = sel?.value || "";
-        if (url) this._sendWs({ action: "ota_set", ota_url: url });
+        if (url) {
+          this._sendWs({ action: "ota_set", ota_url: url });
+          await this._goiDichVu("phicomm_r1", "ota_set", { url }).catch(() => {});
+          await this._lamMoiEntity(250, 2);
+        }
       });
     }
 
@@ -7363,21 +7413,28 @@ class PhicommR1Card extends HTMLElement {
         const agentId = root.getElementById("hass-agent")?.value?.trim() || "";
         const apiKey = root.getElementById("hass-key")?.value?.trim() || "";
         this._sendWs({ action: "hass_set", url, agent_id: agentId, api_key: apiKey || undefined });
+        this._goiDichVu("phicomm_r1", "hass_set", { url, agent_id: agentId, api_key: apiKey || "" }).catch(() => {});
       });
     }
 
     // --- WiFi ---
     const wifiScan = root.getElementById("wifi-scan");
     if (wifiScan) {
-      wifiScan.addEventListener("click", () => {
+      wifiScan.addEventListener("click", async () => {
         this._wifiScanning = true;
         this._veGiaoDien();
         this._sendWs({ action: "wifi_scan" });
+        await this._goiDichVu("phicomm_r1", "wifi_scan").catch(() => {});
+        await this._lamMoiEntity(500, 3);
       });
     }
     const wifiSaved = root.getElementById("wifi-saved");
     if (wifiSaved) {
-      wifiSaved.addEventListener("click", () => { this._sendWs({ action: "wifi_get_saved" }); });
+      wifiSaved.addEventListener("click", async () => {
+        this._sendWs({ action: "wifi_get_saved" });
+        await this._goiDichVu("phicomm_r1", "wifi_get_status").catch(() => {});
+        await this._lamMoiEntity(250, 2);
+      });
     }
     root.querySelectorAll(".wifi-connect").forEach((el) => {
       el.addEventListener("click", () => {
@@ -7388,19 +7445,23 @@ class PhicommR1Card extends HTMLElement {
       });
     });
     root.querySelectorAll(".wifi-delete").forEach((el) => {
-      el.addEventListener("click", () => {
+      el.addEventListener("click", async () => {
         const ssid = el.dataset.ssid || "";
         if (!confirm(`Xóa mạng "${ssid}" đã lưu?`)) return;
         this._sendWs({ action: "wifi_delete_saved", ssid });
+        await this._goiDichVu("phicomm_r1", "wifi_delete_saved", { ssid }).catch(() => {});
+        await this._lamMoiEntity(250, 2);
       });
     });
     const wifiConnectConfirm = root.getElementById("wifi-connect-confirm");
     if (wifiConnectConfirm) {
-      wifiConnectConfirm.addEventListener("click", () => {
+      wifiConnectConfirm.addEventListener("click", async () => {
         const pw = root.getElementById("wifi-password")?.value || "";
         this._sendWs({ action: "wifi_connect", ssid: this._wifiPasswordSsid, password: pw });
         this._wifiPasswordDialog = false;
         this._veGiaoDien();
+        await this._goiDichVu("phicomm_r1", "wifi_connect", { ssid: this._wifiPasswordSsid, password: pw }).catch(() => {});
+        await this._lamMoiEntity(500, 3);
       });
     }
     const wifiConnectCancel = root.getElementById("wifi-connect-cancel");
