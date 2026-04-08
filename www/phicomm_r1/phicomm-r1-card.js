@@ -1737,6 +1737,8 @@ class PhicommR1Card extends HTMLElement {
       if (progressThumbEl) {
         progressThumbEl.style.left = `${progressPercent.toFixed(2)}%`;
       }
+      const percentEl = root.getElementById("playback-percent");
+      if (percentEl) percentEl.textContent = `${Math.round(progressPercent)}%`;
       if (progressTrackEl) {
         progressTrackEl.setAttribute("aria-valuenow", String(Math.round(this._livePositionSeconds)));
         progressTrackEl.setAttribute("aria-valuemax", String(Math.max(0, Math.round(this._liveDurationSeconds))));
@@ -2470,7 +2472,7 @@ class PhicommR1Card extends HTMLElement {
 
           <div class="meta-row">
             <span class="meta">Trạng thái: ${this._maHoaHtml(this._layNhanTrangThaiPhat(currentState))}</span>
-            <span class="meta">${volumePercent}%</span>
+            <span class="meta" id="playback-percent">${Math.round(progressPercent)}%</span>
           </div>
           </div>
         </div>
