@@ -585,7 +585,8 @@ class PhicommR1Card extends HTMLElement {
     const active = this.shadowRoot?.activeElement;
     if (this._mediaQueryFocused) return true;
     if (!active) return false;
-    return active.id === "media-query" || active.id === "chat-input";
+    if (active.tagName === "INPUT" || active.tagName === "TEXTAREA") return true;
+    return false;
   }
 
   _dangTuongTacEq() {
