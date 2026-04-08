@@ -336,6 +336,12 @@ class PhicommR1Card extends HTMLElement {
       !playlistEventChanged &&
       !this._pendingRender
     ) return;
+
+    // When WS is connected and only entity changed (not search/playlist),
+    // skip re-render — WS provides real-time data directly to DOM
+    if (this._mainWsConnected && changed && !searchChanged && !playlistLibraryChanged && !playlistDetailChanged && !playlistEventChanged && !this._pendingRender) {
+      return;
+    }
     if (this._activeTab === "system" && this._dangTuongTacEq()) {
       this._pendingRender = true;
       this._capNhatEqGiaoDien(this.shadowRoot);
@@ -1056,7 +1062,7 @@ class PhicommR1Card extends HTMLElement {
     const ai = attrs.custom_ai || {};
     const volumeLevel = attrs.volume_level;
 
-    if (typeof volumeLevel === "number") {
+    if (typeof volumeLevel === "number" && !this._mainWsConnected) {
       this._volumeLevel = Math.max(0, Math.min(1, volumeLevel));
     }
     const sensitivity = this._epKieuSo(
@@ -6187,7 +6193,10 @@ class PhicommR1Card extends HTMLElement {
       }
       this._dongBoTienDoDom();
       this._capNhatHenGioTienDo();
-      if (this._activeTab === "media") this._veGiaoDien();
+      // Only re-render for title changes (not position/volume ticks)
+      if (m.title && this._activeTab === "media" && !this._dangSuaOInputVanBan()) {
+        this._veGiaoDien();
+      }
     }
 
     // --- Wake word / Custom AI state ---
@@ -6300,7 +6309,7 @@ class PhicommR1Card extends HTMLElement {
     if (!this._wsVolDragging && Date.now() > this._wsVolGuardUntil) {
       const vol = s.vol !== undefined ? Number(s.vol) : null;
       if (vol !== null) {
-        this._volumeLevel = vol / 100;
+        this._volumeLevel = Math.max(0, Math.min(1, vol / 15));
         if (this._activeTab === "media") {
           const slider = this.shadowRoot?.getElementById("media-volume");
           if (slider) slider.value = Math.round(this._volumeLevel * 100);
@@ -6319,7 +6328,7 @@ class PhicommR1Card extends HTMLElement {
       if (s.music_light_luma !== undefined) { this._mainLightBrightness = Math.max(1, Math.min(200, Math.round(s.music_light_luma))); changed = true; }
       if (s.music_light_chroma !== undefined) { this._mainLightSpeed = Math.max(1, Math.min(100, Math.round(s.music_light_chroma))); changed = true; }
       if (s.music_light_mode !== undefined) { this._mainLightMode = s.music_light_mode; changed = true; }
-      if (changed && (this._activeTab === "control" || this._activeTab === "system")) this._veGiaoDien();
+      if (changed && (this._activeTab === "control" || this._activeTab === "system") && !this._dangSuaOInputVanBan()) this._veGiaoDien();
     }
 
     // --- Audio engine (EQ, Bass, Loudness, Mixer) ---
