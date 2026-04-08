@@ -2499,7 +2499,7 @@ class PhicommR1Card extends HTMLElement {
         <div class="volume-wrap">
           <div class="label-line">
             <span><ha-icon icon="mdi:volume-high"></ha-icon> Âm lượng</span>
-            <strong>${volumePercent}%</strong>
+            <strong id="volume-percent">${volumePercent}%</strong>
           </div>
           <input id="media-volume" type="range" min="0" max="100" step="1" value="${volumePercent}" />
         </div>
@@ -6344,8 +6344,11 @@ class PhicommR1Card extends HTMLElement {
         const volMax = this._thuocTinh().volume_max || 15;
         this._volumeLevel = Math.max(0, Math.min(1, vol / volMax));
         if (this._activeTab === "media") {
+          const pct = Math.round(this._volumeLevel * 100);
           const slider = this.shadowRoot?.getElementById("media-volume");
-          if (slider) slider.value = Math.round(this._volumeLevel * 100);
+          if (slider) slider.value = pct;
+          const vl = this.shadowRoot?.getElementById("volume-percent");
+          if (vl) vl.textContent = `${pct}%`;
         }
       }
     }
@@ -6605,6 +6608,8 @@ class PhicommR1Card extends HTMLElement {
         this._volumeLevel = Number(ev.target.value) / 100;
         this._wsVolDragging = true;
         clearTimeout(this._volDragTimer);
+        const vl = this.shadowRoot?.getElementById("volume-percent");
+        if (vl) vl.textContent = `${Math.round(this._volumeLevel * 100)}%`;
       });
       volumeSlider.addEventListener("change", async (ev) => {
         this._volumeLevel = Number(ev.target.value) / 100;
