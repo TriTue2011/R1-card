@@ -52,6 +52,7 @@ class PhicommR1Card extends HTMLElement {
 
     this._wakeEnabled = false;
     this._antiDeafEnabled = false;
+    this._ledEnabled = null;
     this._dlnaEnabled = false;
     this._airplayEnabled = false;
     this._bluetoothEnabled = false;
@@ -1250,6 +1251,9 @@ class PhicommR1Card extends HTMLElement {
     } else if (Array.isArray(alarmData.list)) {
       this._alarms = alarmData.list;
     }
+
+    const ledState = attrs.led_state || {};
+    if (ledState.enabled !== undefined) this._ledEnabled = Boolean(ledState.enabled);
 
     const sysInfo = attrs.system_info || {};
     if (sysInfo.cpu !== undefined) this._cpuPercent = Number(sysInfo.cpu) || 0;
@@ -2633,6 +2637,17 @@ class PhicommR1Card extends HTMLElement {
             <option value="nicole" ${this._live2dModel === "nicole" ? "selected" : ""}>Nicole</option>
             <option value="changli" ${this._live2dModel === "changli" ? "selected" : ""}>Changli</option>
           </select>
+        </div>
+
+        <div class="tile">
+          <div class="label-line">
+            <strong>Đèn LED Chờ</strong>
+            <label class="switch">
+              <input id="led-enabled" type="checkbox" ${this._ledEnabled ? "checked" : ""} />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="small">Tắt để đèn nháy theo nhạc khi phát</div>
         </div>
 
         <div class="tile">
@@ -5585,7 +5600,7 @@ class PhicommR1Card extends HTMLElement {
     this._lastControlStateRequestAt = now;
     try {
       await this._lamMoiEntity(180);
-      // Use direct WS for faster control state
+      // Use direct WS for faster control state (works on LAN)
       this._sendWs({ action: "wake_word_get_enabled" });
       this._sendWs({ action: "wake_word_get_sensitivity" });
       this._sendWs({ action: "custom_ai_get_enabled" });
@@ -5593,8 +5608,13 @@ class PhicommR1Card extends HTMLElement {
       this._sendWs({ action: "live2d_get_model" });
       this._sendWs({ action: "alarm_list" });
       this._sendWs({ action: "led_get_state" });
+      // HA service fallback (works on domain/HTTPS)
       await this._goiDichVu("phicomm_r1", "wake_word_get_enabled").catch(() => {});
-      await this._lamMoiEntity(220);
+      await this._goiDichVu("phicomm_r1", "get_voice").catch(() => {});
+      await this._goiDichVu("phicomm_r1", "get_live2d").catch(() => {});
+      await this._goiDichVu("phicomm_r1", "alarm_list").catch(() => {});
+      await this._goiDichVu("phicomm_r1", "led_get_state").catch(() => {});
+      await this._lamMoiEntity(250, 2);
     } catch (err) {
       console.warn("control bootstrap refresh failed", err);
     }
@@ -6248,7 +6268,11 @@ class PhicommR1Card extends HTMLElement {
 
     // --- LED ---
     if (type === "led_state" || type === "led_toggle_result" || type === "led_get_state_result") {
-      // LED state handled by entity attributes
+      if (d.enabled !== undefined) {
+        this._ledEnabled = Boolean(d.enabled);
+        const cb = this.shadowRoot?.getElementById("led-enabled");
+        if (cb) cb.checked = this._ledEnabled;
+      }
     }
 
     // --- MAC ---
@@ -6825,6 +6849,16 @@ class PhicommR1Card extends HTMLElement {
           this._antiDeafEnabled = !desired;
           ev.target.checked = this._antiDeafEnabled;
         }
+      });
+    }
+
+    const ledEnabled = root.getElementById("led-enabled");
+    if (ledEnabled) {
+      ledEnabled.addEventListener("change", () => {
+        this._ledEnabled = !this._ledEnabled;
+        this._wsGuardCtrl = Date.now();
+        this._sendWs({ action: "led_toggle" });
+        this._goiDichVu("phicomm_r1", "led_toggle", {}).catch(() => {});
       });
     }
 
