@@ -179,6 +179,18 @@ class PhicommR1Card extends HTMLElement {
     this._syncGen = 0;
     this._syncSettingsOpen = false;
     this._switching = false;
+
+    // --- Toast ---
+    this._toastTimer = null;
+
+    // --- Generation counters for sync abort ---
+    this._syncGenEntity = 0;
+    this._syncGenSearch = 0;
+    this._syncGenPlaylist = 0;
+
+    // --- WS reconnection backoff ---
+    this._mainWsRetries = 0;
+    this._spkWsRetries = 0;
   }
 
   static getStubConfig() {
@@ -403,10 +415,17 @@ class PhicommR1Card extends HTMLElement {
     this._xoaHenGioTienDo();
     this._disconnectAllMulti();
     clearTimeout(this._autoSyncTimer);
+    clearTimeout(this._mainReconnect);
+    clearTimeout(this._spkReconnect);
+    clearTimeout(this._volDragTimer);
+    clearTimeout(this._toastTimer);
+    clearInterval(this._spkEqHb);
     this._stopSpkHeartbeat();
     if (this._mainWs) { try { this._mainWs.close(); } catch {} this._mainWs = null; }
     if (this._spkWs) { try { this._spkWs.close(); } catch {} this._spkWs = null; }
     this._mainWsConnected = false;
+    this._mainWsRetries = 0;
+    this._spkWsRetries = 0;
   }
 
   _doiTuongTrangThai() {
@@ -678,6 +697,15 @@ class PhicommR1Card extends HTMLElement {
       if (!historyEl) return;
       historyEl.scrollTop = historyEl.scrollHeight;
     });
+  }
+
+  _toast(msg, type = "") {
+    const el = this.shadowRoot?.getElementById("toast");
+    if (!el) return;
+    el.textContent = msg;
+    el.className = `toast on${type ? " " + type : ""}`;
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => { if (el) el.className = "toast"; }, 2400);
   }
 
   _maHoaHtml(value) {
@@ -1292,6 +1320,11 @@ class PhicommR1Card extends HTMLElement {
     if (Array.isArray(wifiData.scan_results)) this._wifiScanResults = wifiData.scan_results;
     if (Array.isArray(wifiData.saved)) this._wifiSavedNetworks = wifiData.saved;
     if (wifiData.status) this._wifiStatus = String(wifiData.status);
+
+    // Targeted DOM updates (avoid full re-render for frequent changes)
+    if (this._activeTab === "media") {
+      this._dongBoVolumeDom();
+    }
   }
 
   async _goiDichVu(domain, service, data = {}) {
@@ -1372,6 +1405,7 @@ class PhicommR1Card extends HTMLElement {
   }
 
   async _taiThuVienPlaylist(reRender = true) {
+    const gen = ++this._syncGenPlaylist;
     const previousKey = this._khoaTrangThaiPayload(this._thuocTinh().playlist_library || {});
     this._playlistLibraryLoading = true;
     if (reRender) this._veGiaoDien();
@@ -1383,8 +1417,10 @@ class PhicommR1Card extends HTMLElement {
         4500
       );
     } finally {
-      this._playlistLibraryLoading = false;
-      if (reRender) this._veGiaoDien();
+      if (gen === this._syncGenPlaylist) {
+        this._playlistLibraryLoading = false;
+        if (reRender) this._veGiaoDien();
+      }
     }
   }
 
@@ -1466,8 +1502,11 @@ class PhicommR1Card extends HTMLElement {
       const del = e.target.closest("[data-aldel]");
       if (tog) {
         const id = tog.dataset.altog;
+        const a = this._alarms.find((x) => String(x.id ?? x.alarm_id) === String(id));
+        const newState = a ? !a.enabled : true;
         this._sendWs({ action: "alarm_toggle", alarm_id: id });
-        this._goiDichVu("phicomm_r1", "alarm_toggle", { alarm_id: id, enabled: true }).catch(() => {});
+        this._goiDichVu("phicomm_r1", "alarm_toggle", { alarm_id: id, enabled: newState }).catch(() => {});
+        this._toast(newState ? "Đã bật báo thức" : "Đã tắt báo thức", "success");
       }
       if (edit) {
         const id = edit.dataset.aledit;
@@ -1483,6 +1522,7 @@ class PhicommR1Card extends HTMLElement {
         this._pendingDeleteId = a.id ?? a.alarm_id;
         this._sendWs({ action: "alarm_delete", alarm_id: this._pendingDeleteId });
         this._goiDichVu("phicomm_r1", "alarm_delete", { alarm_id: String(this._pendingDeleteId) }).catch(() => {});
+        this._toast("Đã xóa báo thức", "success");
       }
     };
   }
@@ -1556,6 +1596,7 @@ class PhicommR1Card extends HTMLElement {
       }).catch(() => {});
       div.remove();
       this._alarmDialogOpen = false;
+      this._toast(isEdit ? "Đã sửa báo thức" : "Đã thêm báo thức", "success");
     };
   }
 
@@ -1685,6 +1726,7 @@ class PhicommR1Card extends HTMLElement {
         await this._taiThuVienPlaylist(false);
         this._playlistDialog = this._taoTrangThaiDialogPlaylist();
         this._veGiaoDien();
+        this._toast("Đã tạo playlist", "success");
         return;
       }
 
@@ -1709,6 +1751,7 @@ class PhicommR1Card extends HTMLElement {
       }
       this._playlistDialog = this._taoTrangThaiDialogPlaylist();
       this._veGiaoDien();
+      this._toast("Đã thêm bài vào playlist", "success");
     } catch (err) {
       const manualSelectionRequired =
         Boolean(err) &&
@@ -1721,6 +1764,7 @@ class PhicommR1Card extends HTMLElement {
         error: err instanceof Error ? err.message : "Không thể xử lý playlist",
       };
       this._veGiaoDien();
+      this._toast(err instanceof Error ? err.message : "Lỗi playlist", "error");
     }
   }
 
@@ -1866,6 +1910,18 @@ class PhicommR1Card extends HTMLElement {
 
     this._dongBoTienDoDom();
     this._capNhatHenGioTienDo();
+  }
+
+  _dongBoVolumeDom() {
+    if (this._wsVolDragging) return;
+    const root = this.shadowRoot;
+    if (!root) return;
+    const volMax = this._thuocTinh().volume_max || 15;
+    const rawVol = Math.round(this._volumeLevel * volMax);
+    const slider = root.getElementById("media-volume");
+    if (slider && !this._wsVolDragging) slider.value = rawVol;
+    const vl = root.getElementById("volume-percent");
+    if (vl) vl.textContent = `${rawVol}`;
   }
 
   _dongBoTienDoDom() {
@@ -2267,6 +2323,7 @@ class PhicommR1Card extends HTMLElement {
     const service = this._timDichVuTheoTab(this._mediaSearchTab);
     const source = this._nguonKetQuaTheoTab(this._mediaSearchTab);
     if (!service || !source) return;
+    const gen = ++this._syncGenSearch;
     const searchHienTai = this._thuocTinh().last_music_search || {};
     const mocTruoc = this._mocCapNhatTimKiem(searchHienTai);
     const dauVetTruoc = this._dauVetKetQuaTimKiem(searchHienTai);
@@ -2290,6 +2347,8 @@ class PhicommR1Card extends HTMLElement {
         daCoKetQuaMoi = await this._choKetQuaTimKiemMoi(query, source, mocTruoc, dauVetTruoc, 4000);
       }
     } finally {
+      // Abort if a newer search started while we were waiting
+      if (gen !== this._syncGenSearch) return;
       this._dangChoKetQuaTimKiem = false;
       this._timKiemDangCho = null;
       const searchSauCung = this._thuocTinh().last_music_search || {};
@@ -5613,6 +5672,13 @@ class PhicommR1Card extends HTMLElement {
         @keyframes syncBusy { 0%,100% { opacity: .6; } 50% { opacity: .3; } }
         .hidden { display: none !important; }
 
+        /* ── Toast notification ── */
+        .toast { position: fixed; z-index: 9999; left: 50%; transform: translateX(-50%); bottom: 16px; background: rgba(2,6,23,.92); border: 1px solid rgba(148,163,184,.2); color: #e2e8f0; padding: 9px 16px; border-radius: 12px; font-size: 11px; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; white-space: nowrap; backdrop-filter: blur(8px); }
+        .toast.on { opacity: 1; transform: translateX(-50%) translateY(-6px); }
+        .toast.success { border-color: rgba(34,197,94,.35); color: #86efac; }
+        .toast.error { border-color: rgba(239,68,68,.35); color: #fca5a5; }
+        .toast.warning { border-color: rgba(234,179,8,.35); color: #fbbf24; }
+
         /* ── Room volumes ── */
         .room-volumes { border-radius: 12px; background: rgba(2,6,23,.5); border: 1px solid rgba(122,99,255,.15); padding: 8px 12px; margin-bottom: 8px; }
         .room-vol-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
@@ -5666,6 +5732,7 @@ class PhicommR1Card extends HTMLElement {
             ${body}
           </div>
         </div>
+        <div class="toast" id="toast"></div>
       </ha-card>
     `;
 
@@ -6224,6 +6291,8 @@ class PhicommR1Card extends HTMLElement {
     this._mainWs = ws;
     ws.onopen = () => {
       this._mainWsConnected = true;
+      if (this._mainWsRetries > 0) this._toast("Đã kết nối lại WS", "success");
+      this._mainWsRetries = 0;
       this._wsDropCount = 0;
       this._wsRequestInitial();
     };
@@ -6231,9 +6300,10 @@ class PhicommR1Card extends HTMLElement {
     ws.onclose = () => {
       this._mainWsConnected = false;
       this._mainWs = null;
-      this._wsDropCount++;
-      if (this._wsDropCount < 5) {
-        this._mainReconnect = setTimeout(() => this._connectMainWs(), 2000);
+      this._mainWsRetries++;
+      if (this._mainWsRetries <= 10) {
+        const delay = Math.min(2000 * Math.pow(1.5, this._mainWsRetries - 1), 30000) + Math.random() * 1000;
+        this._mainReconnect = setTimeout(() => this._connectMainWs(), delay);
       }
     };
     ws.onerror = () => {};
@@ -6247,12 +6317,16 @@ class PhicommR1Card extends HTMLElement {
     let ws;
     try { ws = new WebSocket(url); } catch (_) { return; }
     this._spkWs = ws;
-    ws.onopen = () => { this._startSpkHeartbeat(); };
+    ws.onopen = () => { this._spkWsRetries = 0; this._startSpkHeartbeat(); };
     ws.onmessage = (ev) => { this._handleSpkWsMsg(ev.data); };
     ws.onclose = () => {
       this._stopSpkHeartbeat();
       this._spkWs = null;
-      this._spkReconnect = setTimeout(() => this._connectSpkWs(), 3000);
+      this._spkWsRetries++;
+      if (this._spkWsRetries <= 10) {
+        const delay = Math.min(3000 * Math.pow(1.5, this._spkWsRetries - 1), 30000) + Math.random() * 1000;
+        this._spkReconnect = setTimeout(() => this._connectSpkWs(), delay);
+      }
     };
     ws.onerror = () => {};
   }
@@ -6791,7 +6865,7 @@ class PhicommR1Card extends HTMLElement {
         this._volumeLevel = Number(ev.target.value) / vm;
         this._wsVolGuardUntil = Date.now() + 3000;
         clearTimeout(this._volDragTimer);
-        this._volDragTimer = setTimeout(() => { this._wsVolDragging = false; }, 2000);
+        this._volDragTimer = setTimeout(() => { this._wsVolDragging = false; }, 3500);
         await this._goiDichVu("media_player", "volume_set", {
           volume_level: this._volumeLevel,
         });
@@ -6902,6 +6976,7 @@ class PhicommR1Card extends HTMLElement {
           if (String(this._playlistDetailVisibleId) === String(playlist.id)) {
             this._playlistDetailVisibleId = "";
           }
+          this._toast("Đã xóa playlist", "success");
         } finally {
           this._playlistLibraryLoading = false;
           this._veGiaoDien();
@@ -6933,6 +7008,7 @@ class PhicommR1Card extends HTMLElement {
           });
           await this._taiChiTietPlaylist(playlistId, false);
           await this._taiThuVienPlaylist(false);
+          this._toast("Đã xóa bài khỏi playlist", "success");
         } finally {
           this._playlistDetailLoading = false;
           this._veGiaoDien();
@@ -7047,6 +7123,7 @@ class PhicommR1Card extends HTMLElement {
         this._sendWs({ action: "led_toggle" });
         await this._goiDichVu("phicomm_r1", "led_toggle", {}).catch(() => {});
         await this._lamMoiEntity(250, 2);
+        this._toast(desired ? "Đã bật đèn LED" : "Đã tắt đèn LED", "success");
       });
     }
 
@@ -7060,6 +7137,7 @@ class PhicommR1Card extends HTMLElement {
         this._sendSpkWs({ type: "Set_DLNA_Open", open: desired ? 1 : 0 });
         await this._goiDichVu("phicomm_r1", "set_dlna", { enabled: desired }).catch(() => {});
         await this._lamMoiEntity(500, 3);
+        this._toast(desired ? "Đã bật DLNA" : "Đã tắt DLNA", "success");
       });
     }
 
@@ -7073,6 +7151,7 @@ class PhicommR1Card extends HTMLElement {
         this._sendSpkWs({ type: "Set_AirPlay_Open", open: desired ? 1 : 0 });
         await this._goiDichVu("phicomm_r1", "set_airplay", { enabled: desired }).catch(() => {});
         await this._lamMoiEntity(500, 3);
+        this._toast(desired ? "Đã bật AirPlay" : "Đã tắt AirPlay", "success");
       });
     }
 
@@ -7090,6 +7169,7 @@ class PhicommR1Card extends HTMLElement {
         });
         await this._goiDichVu("phicomm_r1", "set_bluetooth", { enabled: desired }).catch(() => {});
         await this._lamMoiEntity(500, 3);
+        this._toast(desired ? "Đã bật Bluetooth" : "Đã tắt Bluetooth", "success");
       });
     }
 
@@ -7513,6 +7593,7 @@ class PhicommR1Card extends HTMLElement {
         this._sendWs({ action: "mac_random" });
         await this._goiDichVu("phicomm_r1", "mac_random").catch(() => {});
         await this._lamMoiEntity(250, 2);
+        this._toast("Đã tạo MAC ngẫu nhiên", "success");
       });
     }
     const macRestore = root.getElementById("mac-restore");
@@ -7521,6 +7602,7 @@ class PhicommR1Card extends HTMLElement {
         this._sendWs({ action: "mac_clear" });
         await this._goiDichVu("phicomm_r1", "mac_restore").catch(() => {});
         await this._lamMoiEntity(250, 2);
+        this._toast("Đã khôi phục MAC gốc", "success");
       });
     }
 
@@ -7542,6 +7624,7 @@ class PhicommR1Card extends HTMLElement {
           this._sendWs({ action: "ota_set", ota_url: url });
           await this._goiDichVu("phicomm_r1", "ota_set", { url }).catch(() => {});
           await this._lamMoiEntity(250, 2);
+          this._toast("Đã cập nhật OTA server", "success");
         }
       });
     }
@@ -7555,6 +7638,7 @@ class PhicommR1Card extends HTMLElement {
         const apiKey = root.getElementById("hass-key")?.value?.trim() || "";
         this._sendWs({ action: "hass_set", url, agent_id: agentId, api_key: apiKey || undefined });
         this._goiDichVu("phicomm_r1", "hass_set", { url, agent_id: agentId, api_key: apiKey || "" }).catch(() => {});
+        this._toast("Đã lưu cài đặt HA", "success");
       });
     }
 
@@ -7603,6 +7687,7 @@ class PhicommR1Card extends HTMLElement {
         this._veGiaoDien();
         await this._goiDichVu("phicomm_r1", "wifi_connect", { ssid: this._wifiPasswordSsid, password: pw }).catch(() => {});
         await this._lamMoiEntity(500, 3);
+        this._toast("Đang kết nối WiFi...", "warning");
       });
     }
     const wifiConnectCancel = root.getElementById("wifi-connect-cancel");
