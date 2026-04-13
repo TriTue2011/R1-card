@@ -118,6 +118,7 @@ class PhicommR1Card extends HTMLElement {
 
     this._alarms = [];
     this._alarmDialogOpen = false;
+    this._pendingDeleteId = null;
     this._alarmHour = 7;
     this._alarmMinute = 0;
     this._alarmRepeat = "";
@@ -1222,6 +1223,17 @@ class PhicommR1Card extends HTMLElement {
       this._loudnessGain = Math.max(-3000, Math.min(3000, Math.round(loudnessGain)));
     }
 
+    const mixerConfig = audioConfig.mixer || attrs.mixer_state || attrs.mixerState || {};
+    const dacL = mixerConfig["DAC Digital Volume L"] ?? mixerConfig.dac_l ?? mixerConfig.dacL;
+    if (dacL !== undefined) { const v = parseInt(dacL, 10); if (Number.isFinite(v)) this._dacBassVol = v; }
+    const dacR = mixerConfig["DAC Digital Volume R"] ?? mixerConfig.dac_r ?? mixerConfig.dacR;
+    if (dacR !== undefined) { const v = parseInt(dacR, 10); if (Number.isFinite(v)) this._dacHighVol = v; }
+
+    const surroundConfig = audioConfig.surround || attrs.surround_state || attrs.surroundState || {};
+    if (surroundConfig.width !== undefined) this._surroundWidth = Number(surroundConfig.width) || this._surroundWidth;
+    if (surroundConfig.presence !== undefined) this._surroundPresence = Number(surroundConfig.presence) || this._surroundPresence;
+    if (surroundConfig.space !== undefined) this._surroundSpace = Number(surroundConfig.space) || this._surroundSpace;
+
     this._edgeLightEnabled = this._epKieuBoolean(
       edgeLight.enabled ?? edgeLight.enable ?? edgeLight.state,
       this._edgeLightEnabled
@@ -1258,7 +1270,7 @@ class PhicommR1Card extends HTMLElement {
     }
 
     const ledState = attrs.led_state || {};
-    if (ledState.enabled !== undefined) this._ledEnabled = Boolean(ledState.enabled);
+    if (ledState.enabled !== undefined) this._ledEnabled = this._layTrangThaiCongTac("led_enabled", Boolean(ledState.enabled));
 
     const sysInfo = attrs.system_info || {};
     if (sysInfo.cpu !== undefined) this._cpuPercent = Number(sysInfo.cpu) || 0;
@@ -1409,6 +1421,142 @@ class PhicommR1Card extends HTMLElement {
   _dongDialogPlaylist() {
     this._playlistDialog = this._taoTrangThaiDialogPlaylist();
     this._veGiaoDien();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // ALARM (giống aibox-webui-card.js)
+  // ═══════════════════════════════════════════════════════════════
+
+  _renderAlarms() {
+    const el = this.shadowRoot?.getElementById("alarm-list");
+    if (!el) return;
+    const als = this._alarms;
+    if (!als.length) {
+      el.innerHTML = '<div style="text-align:center;padding:12px;color:rgba(226,232,240,.4);font-size:11px">Chưa có báo thức</div>';
+      return;
+    }
+    const rpMap = { daily: "Hàng ngày", weekly: "Hàng tuần", none: "Một lần" };
+    const dayNames = { 1: "CN", 2: "T2", 3: "T3", 4: "T4", 5: "T5", 6: "T6", 7: "T7" };
+    el.innerHTML = als.map((a) => {
+      const t = `${String(a.hour ?? 0).padStart(2, "0")}:${String(a.minute ?? 0).padStart(2, "0")}`;
+      const id = a.id ?? a.alarm_id ?? 0;
+      const enabled = a.enabled !== false;
+      const daysStr = Array.isArray(a.selected_days) && a.selected_days.length
+        ? a.selected_days.sort((x, y) => x - y).map((d) => dayNames[d] || d).join(" ") : "";
+      return `<div class="alarm-item ${enabled ? "" : "alarm-disabled"}">
+        <div class="alarm-row">
+          <div>
+            <span class="alarm-time">${t}</span>
+            <span class="alarm-id">#${id}</span>
+            ${a.label ? `<span class="alarm-label">${this._maHoaHtml(a.label)}</span>` : ""}
+          </div>
+          <div class="alarm-actions">
+            <button class="mini-btn ${enabled ? "mini-btn-accent" : ""}" data-altog="${id}">${enabled ? "🔔" : "🔕"}</button>
+            <button class="mini-btn" data-aledit="${id}">✏️</button>
+            <button class="mini-btn danger-mini" data-aldel="${id}">✕</button>
+          </div>
+        </div>
+        <div class="alarm-meta">${rpMap[a.repeat] || "Một lần"}${daysStr ? " · " + daysStr : ""} · Vol ${a.volume ?? 100}%${a.youtube_song_name ? " · 🎵 " + this._maHoaHtml(a.youtube_song_name) : ""}</div>
+      </div>`;
+    }).join("");
+
+    el.onclick = (e) => {
+      const tog = e.target.closest("[data-altog]");
+      const edit = e.target.closest("[data-aledit]");
+      const del = e.target.closest("[data-aldel]");
+      if (tog) {
+        const id = tog.dataset.altog;
+        this._sendWs({ action: "alarm_toggle", alarm_id: id });
+        this._goiDichVu("phicomm_r1", "alarm_toggle", { alarm_id: id, enabled: true }).catch(() => {});
+      }
+      if (edit) {
+        const id = edit.dataset.aledit;
+        const a = this._alarms.find((x) => String(x.id ?? x.alarm_id) === String(id));
+        if (a) this._showAlarmModal(a);
+      }
+      if (del) {
+        const id = del.dataset.aldel;
+        const a = this._alarms.find((x) => String(x.id ?? x.alarm_id) === String(id));
+        if (!a) return;
+        const t = `${String(a.hour ?? 0).padStart(2, "0")}:${String(a.minute ?? 0).padStart(2, "0")}`;
+        if (!confirm(`Xóa báo thức #${a.id ?? a.alarm_id} lúc ${t}?`)) return;
+        this._pendingDeleteId = a.id ?? a.alarm_id;
+        this._sendWs({ action: "alarm_delete", alarm_id: this._pendingDeleteId });
+        this._goiDichVu("phicomm_r1", "alarm_delete", { alarm_id: String(this._pendingDeleteId) }).catch(() => {});
+      }
+    };
+  }
+
+  _showAlarmModal(al = null) {
+    const existing = this.shadowRoot?.getElementById("alarmModal");
+    if (existing) existing.remove();
+    const div = document.createElement("div");
+    div.id = "alarmModal";
+    div.className = "alarm-modal-overlay";
+    const isEdit = !!al;
+    div.innerHTML = `<div class="alarm-modal-box">
+      <div class="alarm-modal-head"><strong>${isEdit ? "Sửa" : "Thêm"} báo thức</strong><button class="mini-btn" id="alClose">✕</button></div>
+      <div class="alarm-time-row">
+        <div><div class="small">Giờ</div><input class="alarm-time-input" type="number" id="alH" min="0" max="23" value="${al?.hour ?? 7}" /></div>
+        <span style="font-size:20px;font-weight:900;color:#e2e8f0">:</span>
+        <div><div class="small">Phút</div><input class="alarm-time-input" type="number" id="alM" min="0" max="59" value="${al?.minute ?? 0}" /></div>
+      </div>
+      <div class="small" style="margin-top:6px">Lặp lại</div>
+      <select class="text-input" id="alRpt" style="width:100%;margin-top:2px">
+        <option value="none" ${al?.repeat === "none" || !al?.repeat ? "selected" : ""}>Một lần</option>
+        <option value="daily" ${al?.repeat === "daily" ? "selected" : ""}>Hàng ngày</option>
+        <option value="weekly" ${al?.repeat === "weekly" ? "selected" : ""}>Hàng tuần</option>
+      </select>
+      <div id="alDaysWrap" class="${al?.repeat === "weekly" ? "" : "hidden"}">
+        <div class="alarm-days">${["T2", "T3", "T4", "T5", "T6", "T7", "CN"].map((d, i) => {
+          const v = i < 6 ? i + 2 : 1;
+          return `<label><input type="checkbox" class="al-day-cb" value="${v}" ${al?.selected_days?.includes(v) ? "checked" : ""}>${d}</label>`;
+        }).join("")}</div>
+      </div>
+      <div class="small" style="margin-top:6px">Tên</div>
+      <input class="text-input" id="alLabel" placeholder="Sáng dậy" value="${this._maHoaHtml(al?.label || "")}" style="width:100%;margin-top:2px" />
+      <div class="small" style="margin-top:6px">Volume: <span id="alVolD">${al?.volume ?? 100}</span>%</div>
+      <input type="range" id="alVol" min="0" max="100" value="${al?.volume ?? 100}" style="width:100%" />
+      <div class="small" style="margin-top:6px">YouTube (tùy chọn)</div>
+      <input class="text-input" id="alYt" placeholder="Tên bài hát" value="${this._maHoaHtml(al?.youtube_song_name || "")}" style="width:100%;margin-top:2px" />
+      <div class="actions-inline" style="margin-top:10px">
+        <button class="mini-btn" id="alCancel" style="flex:1">Hủy</button>
+        <button class="mini-btn mini-btn-accent" id="alSubmit" style="flex:1">${isEdit ? "Lưu" : "Thêm"}</button>
+      </div>
+    </div>`;
+
+    this.shadowRoot.appendChild(div);
+    this._alarmDialogOpen = true;
+
+    div.querySelector("#alClose").onclick = () => { div.remove(); this._alarmDialogOpen = false; };
+    div.querySelector("#alCancel").onclick = () => { div.remove(); this._alarmDialogOpen = false; };
+    div.querySelector("#alVol").oninput = function () { div.querySelector("#alVolD").textContent = this.value; };
+    div.querySelector("#alRpt").onchange = function () { div.querySelector("#alDaysWrap").classList.toggle("hidden", this.value !== "weekly"); };
+    div.querySelector("#alSubmit").onclick = () => {
+      const h = parseInt(div.querySelector("#alH").value);
+      const m = parseInt(div.querySelector("#alM").value);
+      if (isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) { alert("Giờ không hợp lệ"); return; }
+      const rpt = div.querySelector("#alRpt").value;
+      const days = rpt === "weekly" ? Array.from(div.querySelectorAll(".al-day-cb:checked")).map((c) => parseInt(c.value)) : undefined;
+      const data = {
+        action: isEdit ? "alarm_edit" : "alarm_add",
+        hour: h, minute: m, repeat: rpt,
+        label: div.querySelector("#alLabel").value.trim(),
+        volume: parseInt(div.querySelector("#alVol").value),
+      };
+      if (isEdit) { data.alarm_id = al.id ?? al.alarm_id; data.enabled = al.enabled; }
+      const yt = div.querySelector("#alYt").value.trim();
+      if (yt) data.youtube_song_name = yt;
+      if (days) data.selected_days = days;
+      this._sendWs(data);
+      this._goiDichVu("phicomm_r1", isEdit ? "alarm_add" : "alarm_add", {
+        hour: h, minute: m, repeat: rpt, days: days ? days.join(",") : "",
+        volume: parseInt(div.querySelector("#alVol").value),
+        youtube_url: yt || "",
+      }).catch(() => {});
+      div.remove();
+      this._alarmDialogOpen = false;
+    };
   }
 
   async _choPayloadPlaylistMoi(previousKey, payloadFactory, timeoutMs = 4500) {
@@ -2411,7 +2559,8 @@ class PhicommR1Card extends HTMLElement {
       currentState === "idle" && this._laTieuDeNghi(playback.title)
         ? "CHO PHAT"
         : this._nhanNguon(playback.source);
-    const volumePercent = Math.round(this._volumeLevel * 100);
+    const volMax = this._thuocTinh().volume_max || 15;
+    const volumeRaw = Math.round(this._volumeLevel * volMax);
     const searchData = this._duLieuTimKiemTheoTab();
     const searchItems = Array.isArray(searchData.items) ? searchData.items : [];
     const listSource = searchData.source || playback.search?.source || playback.play?.source || "youtube";
@@ -2504,9 +2653,9 @@ class PhicommR1Card extends HTMLElement {
         <div class="volume-wrap">
           <div class="label-line">
             <span><ha-icon icon="mdi:volume-high"></ha-icon> Âm lượng</span>
-            <strong id="volume-percent">${volumePercent}%</strong>
+            <strong id="volume-percent">${volumeRaw}</strong>
           </div>
-          <input id="media-volume" type="range" min="0" max="100" step="1" value="${volumePercent}" />
+          <input id="media-volume" type="range" min="0" max="${volMax}" step="1" value="${volumeRaw}" />
         </div>
 
         ${isPlaylistManagerTab ? "" : `
@@ -2574,28 +2723,7 @@ class PhicommR1Card extends HTMLElement {
     for (let i = 1; i <= 30; i++) {
       voiceOpts += `<option value="${i}" ${this._voiceId === i ? "selected" : ""}>${i}. ${VOICES[i]}</option>`;
     }
-    const alarmListHtml = this._alarms.length === 0
-      ? `<div class="small" style="text-align:center;padding:8px;">Chưa có báo thức</div>`
-      : this._alarms.map((a, idx) => {
-          const timeStr = `${String(a.hour ?? a.h ?? 0).padStart(2, "0")}:${String(a.minute ?? a.m ?? 0).padStart(2, "0")}`;
-          const enabled = a.enabled !== false;
-          const id = a.id ?? a.alarm_id ?? idx;
-          return `
-            <div class="alarm-item">
-              <div class="alarm-info">
-                <strong>${timeStr}</strong>
-                <span class="small">${this._maHoaHtml(a.repeat || a.days || "")}</span>
-              </div>
-              <div class="alarm-actions">
-                <label class="switch">
-                  <input type="checkbox" class="alarm-toggle" data-alarm-id="${id}" ${enabled ? "checked" : ""} />
-                  <span class="slider"></span>
-                </label>
-                <button class="mini-btn danger-mini alarm-delete" data-alarm-id="${id}">Xóa</button>
-              </div>
-            </div>
-          `;
-        }).join("");
+    // alarm list is rendered dynamically by _renderAlarms()
     return `
       <section class="panel" aria-label="Control">
         <div class="tile">
@@ -2704,31 +2832,13 @@ class PhicommR1Card extends HTMLElement {
 
         <div class="tile">
           <div class="label-line">
-            <strong>Báo thức</strong>
+            <strong>⏰ Báo thức</strong>
             <div class="alarm-header-actions">
               <button id="alarm-add" class="mini-btn">+ Thêm</button>
-              <button id="alarm-refresh" class="mini-btn">Refresh</button>
+              <button id="alarm-refresh" class="mini-btn">🔄</button>
             </div>
           </div>
-          <div id="alarm-list">${alarmListHtml}</div>
-          ${this._alarmDialogOpen ? `
-            <div class="alarm-dialog tile in-tile">
-              <div class="label-line"><strong>Thêm báo thức</strong></div>
-              <div class="alarm-time-row">
-                <input id="alarm-hour" type="number" min="0" max="23" value="${this._alarmHour}" class="alarm-time-input" />
-                <span>:</span>
-                <input id="alarm-minute" type="number" min="0" max="59" value="${this._alarmMinute}" class="alarm-time-input" />
-              </div>
-              <div class="label-line"><span>Nhãn lặp</span></div>
-              <input id="alarm-repeat" type="text" class="text-input" placeholder="vd: daily, weekdays" value="${this._maHoaHtml(this._alarmRepeat)}" />
-              <div class="label-line"><span>Ngày (0-6, CN=0)</span></div>
-              <input id="alarm-days" type="text" class="text-input" placeholder="vd: 1,2,3,4,5" value="${this._maHoaHtml(this._alarmDays)}" />
-              <div class="actions-inline" style="margin-top:8px;">
-                <button id="alarm-save" class="mini-btn">Lưu</button>
-                <button id="alarm-cancel" class="mini-btn">Hủy</button>
-              </div>
-            </div>
-          ` : ""}
+          <div id="alarm-list"></div>
         </div>
       </section>
     `;
@@ -5333,23 +5443,27 @@ class PhicommR1Card extends HTMLElement {
           gap: 6px;
         }
         .alarm-item {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 8px 0;
-          border-bottom: 1px solid rgba(255,255,255,0.06);
+          padding: 10px 12px;
+          border-radius: 12px;
+          border: 1px solid rgba(148,163,184,.1);
+          background: rgba(2,6,23,.3);
+          margin-bottom: 6px;
         }
-        .alarm-item:last-child { border-bottom: none; }
-        .alarm-info { display: flex; flex-direction: column; gap: 2px; }
-        .alarm-actions { display: flex; gap: 8px; align-items: center; }
+        .alarm-item.alarm-disabled { opacity: 0.5; }
+        .alarm-row { display: flex; justify-content: space-between; align-items: center; }
+        .alarm-time { font-size: 22px; font-weight: 900; color: #e2e8f0; }
+        .alarm-id { font-size: 9px; color: rgba(139,92,246,.7); margin-left: 6px; font-family: monospace; }
+        .alarm-label { font-size: 10px; color: rgba(226,232,240,.6); margin-left: 5px; font-weight: 700; }
+        .alarm-meta { font-size: 10px; color: rgba(226,232,240,.5); margin-top: 3px; }
+        .alarm-actions { display: flex; gap: 4px; flex-shrink: 0; }
         .alarm-time-row {
           display: flex;
-          gap: 6px;
+          gap: 8px;
           align-items: center;
-          margin: 6px 0;
+          margin: 8px 0;
         }
         .alarm-time-input {
-          width: 60px;
+          width: 70px;
           padding: 6px 8px;
           border-radius: 8px;
           border: 1px solid var(--line);
@@ -5358,7 +5472,27 @@ class PhicommR1Card extends HTMLElement {
           font-size: 16px;
           text-align: center;
         }
-        .alarm-dialog { margin-top: 8px; }
+        .alarm-days { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+        .alarm-days label { display: flex; align-items: center; gap: 3px; font-size: 10px; color: rgba(226,232,240,.6); cursor: pointer; }
+        .alarm-days input { width: 14px; height: 14px; accent-color: #7c3aed; }
+        .alarm-modal-overlay {
+          position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+          z-index: 200;
+          background: rgba(0,0,0,.6);
+          display: flex; align-items: center; justify-content: center;
+          padding: 16px;
+        }
+        .alarm-modal-box {
+          background: linear-gradient(180deg, var(--bg-card), var(--bg-main));
+          border: 1px solid var(--line);
+          border-radius: 18px;
+          padding: 18px;
+          max-width: 360px;
+          width: 100%;
+          max-height: 85vh;
+          overflow-y: auto;
+        }
+        .alarm-modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 
         .danger-mini {
           color: #ef4444 !important;
@@ -6272,16 +6406,39 @@ class PhicommR1Card extends HTMLElement {
     // --- Alarms ---
     if (type === "alarm_list" || type === "alarm_list_result") {
       this._alarms = Array.isArray(d.alarms) ? d.alarms : (Array.isArray(d.list) ? d.list : []);
-      if (this._activeTab === "control") this._veGiaoDien();
+      this._renderAlarms();
     }
-    if (type === "alarm_added" || type === "alarm_deleted" || type === "alarm_toggled" || type === "alarm_edited") {
-      this._sendWs({ action: "alarm_list" });
+    if (type === "alarm_added") {
+      if (d.alarm) { this._alarms.push(d.alarm); this._renderAlarms(); }
+      else this._sendWs({ action: "alarm_list" });
+    }
+    if (type === "alarm_edited") {
+      if (d.alarm) {
+        const idx = this._alarms.findIndex((a) => (a.id ?? a.alarm_id) === (d.alarm.id ?? d.alarm.alarm_id));
+        if (idx >= 0) this._alarms[idx] = d.alarm; else this._alarms.push(d.alarm);
+        this._renderAlarms();
+      } else this._sendWs({ action: "alarm_list" });
+    }
+    if (type === "alarm_deleted") {
+      const delId = d.id ?? d.alarm_id ?? this._pendingDeleteId;
+      this._pendingDeleteId = null;
+      if (delId !== undefined && delId !== null) {
+        this._alarms = this._alarms.filter((a) => (a.id ?? a.alarm_id) !== delId);
+        this._renderAlarms();
+      } else this._sendWs({ action: "alarm_list" });
+    }
+    if (type === "alarm_toggled") {
+      if (d.alarm) {
+        const idx = this._alarms.findIndex((a) => (a.id ?? a.alarm_id) === (d.alarm.id ?? d.alarm.alarm_id));
+        if (idx >= 0) { this._alarms[idx].enabled = d.alarm.enabled; this._renderAlarms(); }
+        else this._sendWs({ action: "alarm_list" });
+      } else this._sendWs({ action: "alarm_list" });
     }
 
     // --- LED ---
     if (type === "led_state" || type === "led_toggle_result" || type === "led_get_state_result") {
       if (d.enabled !== undefined) {
-        this._ledEnabled = Boolean(d.enabled);
+        this._ledEnabled = this._layTrangThaiCongTac("led_enabled", Boolean(d.enabled));
         const cb = this.shadowRoot?.getElementById("led-enabled");
         if (cb) cb.checked = this._ledEnabled;
       }
@@ -6356,11 +6513,11 @@ class PhicommR1Card extends HTMLElement {
         const volMax = this._thuocTinh().volume_max || 15;
         this._volumeLevel = Math.max(0, Math.min(1, vol / volMax));
         if (this._activeTab === "media") {
-          const pct = Math.round(this._volumeLevel * 100);
+          const rawVol = Math.round(this._volumeLevel * volMax);
           const slider = this.shadowRoot?.getElementById("media-volume");
-          if (slider) slider.value = pct;
+          if (slider) slider.value = rawVol;
           const vl = this.shadowRoot?.getElementById("volume-percent");
-          if (vl) vl.textContent = `${pct}%`;
+          if (vl) vl.textContent = `${rawVol}`;
         }
       }
     }
@@ -6412,7 +6569,12 @@ class PhicommR1Card extends HTMLElement {
         const hvRaw = s.Mixer["DAC Digital Volume R"];
         if (hvRaw !== undefined) { this._dacHighVol = parseInt(hvRaw, 10); changed = true; }
       }
-      if (changed && this._activeTab === "system") this._veGiaoDien();
+      if (s.surround) {
+        if (s.surround.width !== undefined) { this._surroundWidth = Number(s.surround.width); changed = true; }
+        if (s.surround.presence !== undefined) { this._surroundPresence = Number(s.surround.presence); changed = true; }
+        if (s.surround.space !== undefined) { this._surroundSpace = Number(s.surround.space); changed = true; }
+      }
+      if (changed && (this._activeTab === "system" || this._activeTab === "control") && !this._dangSuaOInputVanBan()) this._veGiaoDien();
     }
 
     // --- CPU/RAM from get_device_info ---
@@ -6617,14 +6779,16 @@ class PhicommR1Card extends HTMLElement {
     const volumeSlider = root.getElementById("media-volume");
     if (volumeSlider) {
       volumeSlider.addEventListener("input", (ev) => {
-        this._volumeLevel = Number(ev.target.value) / 100;
+        const vm = this._thuocTinh().volume_max || 15;
+        this._volumeLevel = Number(ev.target.value) / vm;
         this._wsVolDragging = true;
         clearTimeout(this._volDragTimer);
         const vl = this.shadowRoot?.getElementById("volume-percent");
-        if (vl) vl.textContent = `${Math.round(this._volumeLevel * 100)}%`;
+        if (vl) vl.textContent = `${Math.round(this._volumeLevel * vm)}`;
       });
       volumeSlider.addEventListener("change", async (ev) => {
-        this._volumeLevel = Number(ev.target.value) / 100;
+        const vm = this._thuocTinh().volume_max || 15;
+        this._volumeLevel = Number(ev.target.value) / vm;
         this._wsVolGuardUntil = Date.now() + 3000;
         clearTimeout(this._volDragTimer);
         this._volDragTimer = setTimeout(() => { this._wsVolDragging = false; }, 2000);
@@ -6876,48 +7040,56 @@ class PhicommR1Card extends HTMLElement {
 
     const ledEnabled = root.getElementById("led-enabled");
     if (ledEnabled) {
-      ledEnabled.addEventListener("change", () => {
-        this._ledEnabled = !this._ledEnabled;
-        this._wsGuardCtrl = Date.now();
+      ledEnabled.addEventListener("change", async (ev) => {
+        const desired = Boolean(ev.target.checked);
+        this._ledEnabled = desired;
+        this._datCongTacCho("led_enabled", desired);
         this._sendWs({ action: "led_toggle" });
-        this._goiDichVu("phicomm_r1", "led_toggle", {}).catch(() => {});
+        await this._goiDichVu("phicomm_r1", "led_toggle", {}).catch(() => {});
+        await this._lamMoiEntity(250, 2);
       });
     }
 
     const dlnaEnabled = root.getElementById("dlna-enabled");
     if (dlnaEnabled) {
-      dlnaEnabled.addEventListener("change", (ev) => {
+      dlnaEnabled.addEventListener("change", async (ev) => {
         const desired = Boolean(ev.target.checked);
         this._dlnaEnabled = desired;
+        this._datCongTacCho("dlna_enabled", desired);
         this._wsGuardCtrl = Date.now();
         this._sendSpkWs({ type: "Set_DLNA_Open", open: desired ? 1 : 0 });
-        this._goiDichVu("phicomm_r1", "set_dlna", { enabled: desired }).catch(() => {});
+        await this._goiDichVu("phicomm_r1", "set_dlna", { enabled: desired }).catch(() => {});
+        await this._lamMoiEntity(500, 3);
       });
     }
 
     const airplayEnabled = root.getElementById("airplay-enabled");
     if (airplayEnabled) {
-      airplayEnabled.addEventListener("change", (ev) => {
+      airplayEnabled.addEventListener("change", async (ev) => {
         const desired = Boolean(ev.target.checked);
         this._airplayEnabled = desired;
+        this._datCongTacCho("airplay_enabled", desired);
         this._wsGuardCtrl = Date.now();
         this._sendSpkWs({ type: "Set_AirPlay_Open", open: desired ? 1 : 0 });
-        this._goiDichVu("phicomm_r1", "set_airplay", { enabled: desired }).catch(() => {});
+        await this._goiDichVu("phicomm_r1", "set_airplay", { enabled: desired }).catch(() => {});
+        await this._lamMoiEntity(500, 3);
       });
     }
 
     const bluetoothEnabled = root.getElementById("bluetooth-enabled");
     if (bluetoothEnabled) {
-      bluetoothEnabled.addEventListener("change", (ev) => {
+      bluetoothEnabled.addEventListener("change", async (ev) => {
         const desired = Boolean(ev.target.checked);
         this._bluetoothEnabled = desired;
+        this._datCongTacCho("bluetooth_enabled", desired);
         this._wsGuardCtrl = Date.now();
         this._sendSpkWs({
           type: "send_message", what: 64,
           arg1: desired ? 1 : 2, arg2: -1,
           type_id: desired ? "Open Bluetooth" : "Close Bluetooth",
         });
-        this._goiDichVu("phicomm_r1", "set_bluetooth", { enabled: desired }).catch(() => {});
+        await this._goiDichVu("phicomm_r1", "set_bluetooth", { enabled: desired }).catch(() => {});
+        await this._lamMoiEntity(500, 3);
       });
     }
 
@@ -7209,7 +7381,7 @@ class PhicommR1Card extends HTMLElement {
         const lbl = root.getElementById("sur-w-val");
         if (lbl) lbl.textContent = this._surroundWidth;
       });
-      surWidth.addEventListener("change", async (ev) => {
+      surWidth.addEventListener("change", (ev) => {
         this._surroundWidth = Number(ev.target.value);
         this._wsGuardAudio = Date.now();
         this._sendSpkMsg(60, this._surroundWidth);
@@ -7222,6 +7394,11 @@ class PhicommR1Card extends HTMLElement {
         const lbl = root.getElementById("sur-p-val");
         if (lbl) lbl.textContent = this._surroundPresence;
       });
+      surPresence.addEventListener("change", (ev) => {
+        this._surroundPresence = Number(ev.target.value);
+        this._wsGuardAudio = Date.now();
+        this._sendSpkMsg(61, this._surroundPresence);
+      });
     }
     const surSpace = root.getElementById("sur-space");
     if (surSpace) {
@@ -7229,6 +7406,11 @@ class PhicommR1Card extends HTMLElement {
         this._surroundSpace = Number(ev.target.value);
         const lbl = root.getElementById("sur-s-val");
         if (lbl) lbl.textContent = this._surroundSpace;
+      });
+      surSpace.addEventListener("change", (ev) => {
+        this._surroundSpace = Number(ev.target.value);
+        this._wsGuardAudio = Date.now();
+        this._sendSpkMsg(62, this._surroundSpace);
       });
     }
     root.querySelectorAll(".sur-preset").forEach((el) => {
@@ -7240,6 +7422,8 @@ class PhicommR1Card extends HTMLElement {
         this._surroundWidth = w; this._surroundPresence = p; this._surroundSpace = s;
         this._wsGuardAudio = Date.now();
         this._sendSpkMsg(60, w);
+        this._sendSpkMsg(61, p);
+        this._sendSpkMsg(62, s);
         this._veGiaoDien();
       });
     });
@@ -7277,12 +7461,7 @@ class PhicommR1Card extends HTMLElement {
     // --- Alarms ---
     const alarmAdd = root.getElementById("alarm-add");
     if (alarmAdd) {
-      alarmAdd.addEventListener("click", () => {
-        this._alarmDialogOpen = true;
-        this._alarmHour = 7; this._alarmMinute = 0;
-        this._alarmRepeat = ""; this._alarmDays = "";
-        this._veGiaoDien();
-      });
+      alarmAdd.addEventListener("click", () => this._showAlarmModal());
     }
     const alarmRefresh = root.getElementById("alarm-refresh");
     if (alarmRefresh) {
@@ -7292,45 +7471,7 @@ class PhicommR1Card extends HTMLElement {
         await this._lamMoiEntity(250, 2);
       });
     }
-    const alarmSave = root.getElementById("alarm-save");
-    if (alarmSave) {
-      alarmSave.addEventListener("click", async () => {
-        const h = Number(root.getElementById("alarm-hour")?.value || 7);
-        const m = Number(root.getElementById("alarm-minute")?.value || 0);
-        const rep = root.getElementById("alarm-repeat")?.value || "";
-        const days = root.getElementById("alarm-days")?.value || "";
-        this._sendWs({ action: "alarm_add", hour: h, minute: m, repeat: rep, days: days });
-        this._alarmDialogOpen = false;
-        this._veGiaoDien();
-        await this._goiDichVu("phicomm_r1", "alarm_add", { hour: h, minute: m, repeat: rep, days: days }).catch(() => {});
-        await this._lamMoiEntity(250, 2);
-      });
-    }
-    const alarmCancel = root.getElementById("alarm-cancel");
-    if (alarmCancel) {
-      alarmCancel.addEventListener("click", () => {
-        this._alarmDialogOpen = false;
-        this._veGiaoDien();
-      });
-    }
-    root.querySelectorAll(".alarm-toggle").forEach((el) => {
-      el.addEventListener("change", async (ev) => {
-        const id = el.dataset.alarmId;
-        const enabled = Boolean(ev.target.checked);
-        this._sendWs({ action: "alarm_toggle", alarm_id: id, enabled });
-        await this._goiDichVu("phicomm_r1", "alarm_toggle", { alarm_id: id, enabled }).catch(() => {});
-        await this._lamMoiEntity(250);
-      });
-    });
-    root.querySelectorAll(".alarm-delete").forEach((el) => {
-      el.addEventListener("click", async () => {
-        const id = el.dataset.alarmId;
-        if (!confirm("Xóa báo thức này?")) return;
-        this._sendWs({ action: "alarm_delete", alarm_id: id });
-        await this._goiDichVu("phicomm_r1", "alarm_delete", { alarm_id: id }).catch(() => {});
-        await this._lamMoiEntity(250, 2);
-      });
-    });
+    this._renderAlarms();
 
     // --- TikTok Reply ---
     const tiktokToggle = root.getElementById("tiktok-toggle");
