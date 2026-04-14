@@ -1325,6 +1325,9 @@ class PhicommR1Card extends HTMLElement {
     if (this._activeTab === "media") {
       this._dongBoVolumeDom();
     }
+    if (this._activeTab === "control") {
+      this._dongBoToggleDom();
+    }
   }
 
   async _goiDichVu(domain, service, data = {}) {
@@ -1922,6 +1925,23 @@ class PhicommR1Card extends HTMLElement {
     if (slider && !this._wsVolDragging) slider.value = rawVol;
     const vl = root.getElementById("volume-percent");
     if (vl) vl.textContent = `${rawVol}`;
+  }
+
+  _dongBoToggleDom() {
+    const root = this.shadowRoot;
+    if (!root) return;
+    const map = {
+      "led-enabled": this._ledEnabled,
+      "dlna-enabled": this._dlnaEnabled,
+      "airplay-enabled": this._airplayEnabled,
+      "bluetooth-enabled": this._bluetoothEnabled,
+      "wake-enabled": this._wakeEnabled,
+      "main-light-enabled": this._mainLightEnabled,
+    };
+    for (const [id, state] of Object.entries(map)) {
+      const el = root.getElementById(id);
+      if (el && el.type === "checkbox") el.checked = Boolean(state);
+    }
   }
 
   _dongBoTienDoDom() {
@@ -6600,14 +6620,17 @@ class PhicommR1Card extends HTMLElement {
     const ctrlOk = Date.now() - this._wsGuardCtrl > 3000;
     if (ctrlOk) {
       let changed = false;
-      if (s.dlna_open !== undefined) { this._dlnaEnabled = Boolean(s.dlna_open); changed = true; }
-      if (s.airplay_open !== undefined) { this._airplayEnabled = Boolean(s.airplay_open); changed = true; }
-      if (s.device_state !== undefined) { this._bluetoothEnabled = (s.device_state === 3); changed = true; }
-      if (s.music_light_enable !== undefined) { this._mainLightEnabled = Boolean(s.music_light_enable); changed = true; }
+      if (s.dlna_open !== undefined) { this._dlnaEnabled = this._layTrangThaiCongTac("dlna_enabled", Boolean(s.dlna_open)); changed = true; }
+      if (s.airplay_open !== undefined) { this._airplayEnabled = this._layTrangThaiCongTac("airplay_enabled", Boolean(s.airplay_open)); changed = true; }
+      if (s.device_state !== undefined) { this._bluetoothEnabled = this._layTrangThaiCongTac("bluetooth_enabled", s.device_state === 3); changed = true; }
+      if (s.music_light_enable !== undefined) { this._mainLightEnabled = this._layTrangThaiCongTac("main_light_enabled", Boolean(s.music_light_enable)); changed = true; }
       if (s.music_light_luma !== undefined) { this._mainLightBrightness = Math.max(1, Math.min(200, Math.round(s.music_light_luma))); changed = true; }
       if (s.music_light_chroma !== undefined) { this._mainLightSpeed = Math.max(1, Math.min(100, Math.round(s.music_light_chroma))); changed = true; }
       if (s.music_light_mode !== undefined) { this._mainLightMode = s.music_light_mode; changed = true; }
-      if (changed && (this._activeTab === "control" || this._activeTab === "system") && !this._dangSuaOInputVanBan()) this._veGiaoDien();
+      if (changed) {
+        this._dongBoToggleDom();
+        if ((this._activeTab === "control" || this._activeTab === "system") && !this._dangSuaOInputVanBan()) this._veGiaoDien();
+      }
     }
 
     // --- Audio engine (EQ, Bass, Loudness, Mixer) ---
@@ -7116,59 +7139,60 @@ class PhicommR1Card extends HTMLElement {
 
     const ledEnabled = root.getElementById("led-enabled");
     if (ledEnabled) {
-      ledEnabled.addEventListener("change", async (ev) => {
+      ledEnabled.addEventListener("change", (ev) => {
         const desired = Boolean(ev.target.checked);
         this._ledEnabled = desired;
-        this._datCongTacCho("led_enabled", desired);
+        this._datCongTacCho("led_enabled", desired, 8000);
+        this._wsGuardCtrl = Date.now();
         this._sendWs({ action: "led_toggle" });
-        await this._goiDichVu("phicomm_r1", "led_toggle", {}).catch(() => {});
-        await this._lamMoiEntity(250, 2);
+        this._goiDichVu("phicomm_r1", "led_toggle", {}).catch(() => {});
+        this._dongBoToggleDom();
         this._toast(desired ? "Đã bật đèn LED" : "Đã tắt đèn LED", "success");
       });
     }
 
     const dlnaEnabled = root.getElementById("dlna-enabled");
     if (dlnaEnabled) {
-      dlnaEnabled.addEventListener("change", async (ev) => {
+      dlnaEnabled.addEventListener("change", (ev) => {
         const desired = Boolean(ev.target.checked);
         this._dlnaEnabled = desired;
-        this._datCongTacCho("dlna_enabled", desired);
+        this._datCongTacCho("dlna_enabled", desired, 8000);
         this._wsGuardCtrl = Date.now();
         this._sendSpkWs({ type: "Set_DLNA_Open", open: desired ? 1 : 0 });
-        await this._goiDichVu("phicomm_r1", "set_dlna", { enabled: desired }).catch(() => {});
-        await this._lamMoiEntity(500, 3);
+        this._goiDichVu("phicomm_r1", "set_dlna", { enabled: desired }).catch(() => {});
+        this._dongBoToggleDom();
         this._toast(desired ? "Đã bật DLNA" : "Đã tắt DLNA", "success");
       });
     }
 
     const airplayEnabled = root.getElementById("airplay-enabled");
     if (airplayEnabled) {
-      airplayEnabled.addEventListener("change", async (ev) => {
+      airplayEnabled.addEventListener("change", (ev) => {
         const desired = Boolean(ev.target.checked);
         this._airplayEnabled = desired;
-        this._datCongTacCho("airplay_enabled", desired);
+        this._datCongTacCho("airplay_enabled", desired, 8000);
         this._wsGuardCtrl = Date.now();
         this._sendSpkWs({ type: "Set_AirPlay_Open", open: desired ? 1 : 0 });
-        await this._goiDichVu("phicomm_r1", "set_airplay", { enabled: desired }).catch(() => {});
-        await this._lamMoiEntity(500, 3);
+        this._goiDichVu("phicomm_r1", "set_airplay", { enabled: desired }).catch(() => {});
+        this._dongBoToggleDom();
         this._toast(desired ? "Đã bật AirPlay" : "Đã tắt AirPlay", "success");
       });
     }
 
     const bluetoothEnabled = root.getElementById("bluetooth-enabled");
     if (bluetoothEnabled) {
-      bluetoothEnabled.addEventListener("change", async (ev) => {
+      bluetoothEnabled.addEventListener("change", (ev) => {
         const desired = Boolean(ev.target.checked);
         this._bluetoothEnabled = desired;
-        this._datCongTacCho("bluetooth_enabled", desired);
+        this._datCongTacCho("bluetooth_enabled", desired, 8000);
         this._wsGuardCtrl = Date.now();
         this._sendSpkWs({
           type: "send_message", what: 64,
           arg1: desired ? 1 : 2, arg2: -1,
           type_id: desired ? "Open Bluetooth" : "Close Bluetooth",
         });
-        await this._goiDichVu("phicomm_r1", "set_bluetooth", { enabled: desired }).catch(() => {});
-        await this._lamMoiEntity(500, 3);
+        this._goiDichVu("phicomm_r1", "set_bluetooth", { enabled: desired }).catch(() => {});
+        this._dongBoToggleDom();
         this._toast(desired ? "Đã bật Bluetooth" : "Đã tắt Bluetooth", "success");
       });
     }

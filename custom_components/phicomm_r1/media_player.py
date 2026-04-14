@@ -841,9 +841,12 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
         if aibox_playback:
             attrs["aibox_playback"] = aibox_playback
 
-        # LED state from coordinator
-        if status.led_state:
-            attrs["led_state"] = status.led_state
+        # LED state: prefer local (from toggle/get response), fallback coordinator
+        merged_led = dict(status.led_state or {})
+        if self._led_state:
+            merged_led.update(self._led_state)
+        if merged_led:
+            attrs["led_state"] = merged_led
 
         merged_audio = dict(self._system_state.get("audio_config") or {})
         if status.audio_state:
