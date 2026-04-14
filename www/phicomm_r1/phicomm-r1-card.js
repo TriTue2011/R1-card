@@ -1178,13 +1178,13 @@ class PhicommR1Card extends HTMLElement {
     const edgeLight = attrs.edge_light || attrs.edgeLight || {};
     const dangGiuEqCucBo = Date.now() < this._eqSyncGuardUntil;
     if (!dangGiuEqCucBo) {
-      this._eqEnabled = this._epKieuBoolean(
+      this._eqEnabled = this._layTrangThaiCongTac("eq_enabled", this._epKieuBoolean(
         eqConfig.Eq_Enable ??
           eqConfig.sound_effects_eq_enable ??
           eqConfig.eq_enable ??
           eqConfig.enabled,
         this._eqEnabled
-      );
+      ));
 
       const eqBands = Array.isArray(eqConfig.Bands?.list) ? eqConfig.Bands.list : [];
       if (eqBands.length > 0) {
@@ -1217,13 +1217,13 @@ class PhicommR1Card extends HTMLElement {
       this._eqLevel = this._layEqLevelTheoBand(this._eqBand);
     }
 
-    this._bassEnabled = this._epKieuBoolean(
+    this._bassEnabled = this._layTrangThaiCongTac("bass_enabled", this._epKieuBoolean(
       bassConfig.Bass_Enable ??
         bassConfig.sound_effects_bass_enable ??
         bassConfig.bass_enable ??
         bassConfig.enabled,
       this._bassEnabled
-    );
+    ));
     const bassStrength = this._epKieuSo(
       bassConfig.Current_Strength ??
         bassConfig.current_strength ??
@@ -1234,13 +1234,13 @@ class PhicommR1Card extends HTMLElement {
       this._bassStrength = Math.max(0, Math.min(1000, Math.round(bassStrength)));
     }
 
-    this._loudnessEnabled = this._epKieuBoolean(
+    this._loudnessEnabled = this._layTrangThaiCongTac("loudness_enabled", this._epKieuBoolean(
       loudnessConfig.Loudness_Enable ??
         loudnessConfig.sound_effects_loudness_enable ??
         loudnessConfig.loudness_enable ??
         loudnessConfig.enabled,
       this._loudnessEnabled
-    );
+    ));
     const loudnessGain = this._epKieuSo(
       loudnessConfig.Current_Gain ??
         loudnessConfig.current_gain ??
@@ -1251,21 +1251,24 @@ class PhicommR1Card extends HTMLElement {
       this._loudnessGain = Math.max(-3000, Math.min(3000, Math.round(loudnessGain)));
     }
 
+    const audioGuardOk = Date.now() - this._wsGuardAudio > 3000;
     const mixerConfig = audioConfig.mixer || attrs.mixer_state || attrs.mixerState || {};
-    const dacL = mixerConfig["DAC Digital Volume L"] ?? mixerConfig.dac_l ?? mixerConfig.dacL;
-    if (dacL !== undefined) { const v = parseInt(dacL, 10); if (Number.isFinite(v)) this._dacBassVol = v; }
-    const dacR = mixerConfig["DAC Digital Volume R"] ?? mixerConfig.dac_r ?? mixerConfig.dacR;
-    if (dacR !== undefined) { const v = parseInt(dacR, 10); if (Number.isFinite(v)) this._dacHighVol = v; }
+    if (audioGuardOk) {
+      const dacL = mixerConfig["DAC Digital Volume L"] ?? mixerConfig.dac_l ?? mixerConfig.dacL;
+      if (dacL !== undefined) { const v = parseInt(dacL, 10); if (Number.isFinite(v)) this._dacBassVol = v; }
+      const dacR = mixerConfig["DAC Digital Volume R"] ?? mixerConfig.dac_r ?? mixerConfig.dacR;
+      if (dacR !== undefined) { const v = parseInt(dacR, 10); if (Number.isFinite(v)) this._dacHighVol = v; }
 
-    const surroundConfig = audioConfig.surround || attrs.surround_state || attrs.surroundState || {};
-    if (surroundConfig.width !== undefined) this._surroundWidth = Number(surroundConfig.width) || this._surroundWidth;
-    if (surroundConfig.presence !== undefined) this._surroundPresence = Number(surroundConfig.presence) || this._surroundPresence;
-    if (surroundConfig.space !== undefined) this._surroundSpace = Number(surroundConfig.space) || this._surroundSpace;
+      const surroundConfig = audioConfig.surround || attrs.surround_state || attrs.surroundState || {};
+      if (surroundConfig.width !== undefined) this._surroundWidth = Number(surroundConfig.width) || this._surroundWidth;
+      if (surroundConfig.presence !== undefined) this._surroundPresence = Number(surroundConfig.presence) || this._surroundPresence;
+      if (surroundConfig.space !== undefined) this._surroundSpace = Number(surroundConfig.space) || this._surroundSpace;
+    }
 
-    this._edgeLightEnabled = this._epKieuBoolean(
+    this._edgeLightEnabled = this._layTrangThaiCongTac("edge_light_enabled", this._epKieuBoolean(
       edgeLight.enabled ?? edgeLight.enable ?? edgeLight.state,
       this._edgeLightEnabled
-    );
+    ));
     const edgeIntensity = this._epKieuSo(
       edgeLight.intensity ?? edgeLight.value,
       this._edgeLightIntensity
@@ -1287,7 +1290,7 @@ class PhicommR1Card extends HTMLElement {
     }
     const tiktokData = attrs.tiktok_data || {};
     if (tiktokData.enabled !== undefined) {
-      this._tiktokReply = Boolean(tiktokData.enabled);
+      this._tiktokReply = this._layTrangThaiCongTac("tiktok_reply", Boolean(tiktokData.enabled));
     }
 
     const alarmData = attrs.alarm_data || {};
@@ -1936,7 +1939,12 @@ class PhicommR1Card extends HTMLElement {
       "airplay-enabled": this._airplayEnabled,
       "bluetooth-enabled": this._bluetoothEnabled,
       "wake-enabled": this._wakeEnabled,
+      "ai-enabled": this._antiDeafEnabled,
       "main-light-enabled": this._mainLightEnabled,
+      "edge-light-enabled": this._edgeLightEnabled,
+      "eq-enabled": this._eqEnabled,
+      "bass-enabled": this._bassEnabled,
+      "loudness-enabled": this._loudnessEnabled,
     };
     for (const [id, state] of Object.entries(map)) {
       const el = root.getElementById(id);
@@ -6493,7 +6501,7 @@ class PhicommR1Card extends HTMLElement {
 
     // --- TikTok ---
     if (type === "tiktok_reply_state" || type === "tiktok_reply_result") {
-      if (d.enabled !== undefined) this._tiktokReply = Boolean(d.enabled);
+      if (d.enabled !== undefined) this._tiktokReply = this._layTrangThaiCongTac("tiktok_reply", Boolean(d.enabled));
       if (this._activeTab === "chat") this._veGiaoDien();
     }
 
@@ -6640,7 +6648,7 @@ class PhicommR1Card extends HTMLElement {
       let changed = false;
       if (s.eq) {
         const eqEn = s.eq.Eq_Enable !== undefined ? s.eq.Eq_Enable : s.eq.sound_effects_eq_enable;
-        if (eqEn !== undefined) { this._eqEnabled = Boolean(eqEn); changed = true; }
+        if (eqEn !== undefined) { this._eqEnabled = this._layTrangThaiCongTac("eq_enabled", Boolean(eqEn)); changed = true; }
         if (s.eq.Bands?.list) {
           s.eq.Bands.list.forEach((b, i) => {
             const lv = b.BandLevel ?? 0;
@@ -6652,12 +6660,12 @@ class PhicommR1Card extends HTMLElement {
       }
       if (s.bass) {
         const bassEn = s.bass.Bass_Enable ?? s.bass.sound_effects_bass_enable;
-        if (bassEn !== undefined) { this._bassEnabled = Boolean(bassEn); changed = true; }
+        if (bassEn !== undefined) { this._bassEnabled = this._layTrangThaiCongTac("bass_enabled", Boolean(bassEn)); changed = true; }
         if (s.bass.Current_Strength !== undefined) { this._bassStrength = s.bass.Current_Strength; changed = true; }
       }
       if (s.loudness) {
         const loudEn = s.loudness.Loudness_Enable ?? s.loudness.sound_effects_loudness_enable;
-        if (loudEn !== undefined) { this._loudnessEnabled = Boolean(loudEn); changed = true; }
+        if (loudEn !== undefined) { this._loudnessEnabled = this._layTrangThaiCongTac("loudness_enabled", Boolean(loudEn)); changed = true; }
         if (s.loudness.Current_Gain !== undefined) { this._loudnessGain = Math.round(s.loudness.Current_Gain); changed = true; }
       }
       if (s.Mixer) {
@@ -7099,12 +7107,11 @@ class PhicommR1Card extends HTMLElement {
       wakeSensitivity.addEventListener("input", (ev) => {
         this._wakeSensitivity = Number(ev.target.value);
       });
-      wakeSensitivity.addEventListener("change", async (ev) => {
+      wakeSensitivity.addEventListener("change", (ev) => {
         this._wakeSensitivity = Number(ev.target.value);
-        await this._goiDichVu("phicomm_r1", "wake_word_set_sensitivity", {
+        this._goiDichVu("phicomm_r1", "wake_word_set_sensitivity", {
           sensitivity: this._wakeSensitivity,
-        });
-        await this._lamMoiEntity(300);
+        }).catch(() => {});
       });
     }
 
@@ -7122,18 +7129,11 @@ class PhicommR1Card extends HTMLElement {
       aiEnabled.addEventListener("change", async (ev) => {
         const desired = Boolean(ev.target.checked);
         this._antiDeafEnabled = desired;
-        this._datCongTacCho("anti_deaf_enabled", desired);
-        try {
-          await this._goiDichVu("phicomm_r1", "anti_deaf_ai_set_enabled", {
-            enabled: desired,
-          });
-          await this._lamMoiEntity(250, 2);
-        } catch (err) {
-          console.warn("anti_deaf_ai_set_enabled failed", err);
-          this._xoaCongTacCho("anti_deaf_enabled");
-          this._antiDeafEnabled = !desired;
-          ev.target.checked = this._antiDeafEnabled;
-        }
+        this._datCongTacCho("anti_deaf_enabled", desired, 8000);
+        this._goiDichVu("phicomm_r1", "anti_deaf_ai_set_enabled", {
+          enabled: desired,
+        }).catch(() => {});
+        this._dongBoToggleDom();
       });
     }
 
@@ -7262,10 +7262,11 @@ class PhicommR1Card extends HTMLElement {
 
     const eqEnabled = root.getElementById("eq-enabled");
     if (eqEnabled) {
-      eqEnabled.addEventListener("change", async (ev) => {
+      eqEnabled.addEventListener("change", (ev) => {
         this._eqEnabled = Boolean(ev.target.checked);
+        this._datCongTacCho("eq_enabled", this._eqEnabled, 8000);
         this._wsGuardAudio = Date.now();
-        this._batDauCanhGacDongBoEq(1400);
+        this._batDauCanhGacDongBoEq(3000);
         this._capNhatEqGiaoDien(root);
         this._sendSpkWs({ type: "set_eq_enable", enable: this._eqEnabled });
         this._goiDichVu("media_player", "set_eq_enable", { enabled: this._eqEnabled }).catch(() => {});
@@ -7325,6 +7326,7 @@ class PhicommR1Card extends HTMLElement {
     if (bassEnabled) {
       bassEnabled.addEventListener("change", (ev) => {
         this._bassEnabled = Boolean(ev.target.checked);
+        this._datCongTacCho("bass_enabled", this._bassEnabled, 8000);
         this._wsGuardAudio = Date.now();
         this._sendSpkWs({ type: "set_bass_enable", enable: this._bassEnabled });
         this._goiDichVu("phicomm_r1", "set_bass_enable", { enabled: this._bassEnabled }).catch(() => {});
@@ -7348,6 +7350,7 @@ class PhicommR1Card extends HTMLElement {
     if (loudnessEnabled) {
       loudnessEnabled.addEventListener("change", (ev) => {
         this._loudnessEnabled = Boolean(ev.target.checked);
+        this._datCongTacCho("loudness_enabled", this._loudnessEnabled, 8000);
         this._wsGuardAudio = Date.now();
         this._sendSpkWs({ type: "set_loudness_enable", enable: this._loudnessEnabled });
         this._goiDichVu("phicomm_r1", "set_loudness_enable", { enabled: this._loudnessEnabled }).catch(() => {});
@@ -7372,9 +7375,11 @@ class PhicommR1Card extends HTMLElement {
       mainLightEnabled.addEventListener("change", (ev) => {
         const desired = Boolean(ev.target.checked);
         this._mainLightEnabled = desired;
+        this._datCongTacCho("main_light_enabled", desired, 8000);
         this._wsGuardCtrl = Date.now();
         this._sendSpkMsg(64, desired ? 1 : 0);
         this._goiDichVu("phicomm_r1", "set_main_light", { enabled: desired }).catch(() => {});
+        this._dongBoToggleDom();
       });
     }
 
@@ -7417,13 +7422,14 @@ class PhicommR1Card extends HTMLElement {
 
     const edgeEnabled = root.getElementById("edge-light-enabled");
     if (edgeEnabled) {
-      edgeEnabled.addEventListener("change", async (ev) => {
+      edgeEnabled.addEventListener("change", (ev) => {
         this._edgeLightEnabled = Boolean(ev.target.checked);
-        await this._goiDichVu("phicomm_r1", "set_edge_light", {
+        this._datCongTacCho("edge_light_enabled", this._edgeLightEnabled, 8000);
+        this._wsGuardCtrl = Date.now();
+        this._goiDichVu("phicomm_r1", "set_edge_light", {
           enabled: this._edgeLightEnabled,
           intensity: this._edgeLightIntensity,
-        });
-        await this._lamMoiEntity(250, 2);
+        }).catch(() => {});
       });
     }
 
@@ -7432,13 +7438,13 @@ class PhicommR1Card extends HTMLElement {
       edgeIntensity.addEventListener("input", (ev) => {
         this._edgeLightIntensity = Number(ev.target.value);
       });
-      edgeIntensity.addEventListener("change", async (ev) => {
+      edgeIntensity.addEventListener("change", (ev) => {
         this._edgeLightIntensity = Number(ev.target.value);
-        await this._goiDichVu("phicomm_r1", "set_edge_light", {
+        this._wsGuardCtrl = Date.now();
+        this._goiDichVu("phicomm_r1", "set_edge_light", {
           enabled: this._edgeLightEnabled,
           intensity: this._edgeLightIntensity,
-        });
-        await this._lamMoiEntity(250, 2);
+        }).catch(() => {});
       });
     }
 
@@ -7582,9 +7588,11 @@ class PhicommR1Card extends HTMLElement {
     if (tiktokToggle) {
       tiktokToggle.addEventListener("click", () => {
         this._tiktokReply = !this._tiktokReply;
+        this._datCongTacCho("tiktok_reply", this._tiktokReply, 8000);
         this._sendWs({ action: "tiktok_reply_toggle", enabled: this._tiktokReply });
         this._goiDichVu("phicomm_r1", "set_tiktok_reply", { enabled: this._tiktokReply }).catch(() => {});
         this._veGiaoDien();
+        this._toast(this._tiktokReply ? "Đã bật TikTok Reply" : "Đã tắt TikTok Reply", "success");
       });
     }
 
