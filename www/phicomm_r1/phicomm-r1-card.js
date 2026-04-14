@@ -164,6 +164,7 @@ class PhicommR1Card extends HTMLElement {
     this._wsVolDragging = false;
     this._wsVolGuardUntil = 0;
     this._wsDropCount = 0;
+    this._mainWsPoll = null;   // Main WS tab-specific polling timer
 
     // --- Dual-mode (LAN / Domain) ---
     this._inited = false;
@@ -489,6 +490,7 @@ class PhicommR1Card extends HTMLElement {
     clearTimeout(this._toastTimer);
     clearInterval(this._spkEqHb);
     this._stopSpkHeartbeat();
+    this._stopTabPolling();
     if (this._mainWs) { try { this._mainWs.close(); } catch {} this._mainWs = null; }
     if (this._spkWs) { try { this._spkWs.close(); } catch {} this._spkWs = null; }
     this._mainWsConnected = false;
@@ -6606,6 +6608,7 @@ class PhicommR1Card extends HTMLElement {
     clearTimeout(this._reconnectTimer);
     clearTimeout(this._connectTimeout);
     this._stopSpkHeartbeat();
+    this._stopTabPolling();
     if (this._mainWs) {
       try { this._mainWs.onclose = null; this._mainWs.close(); } catch (_) {}
       this._mainWs = null;
@@ -6637,6 +6640,39 @@ class PhicommR1Card extends HTMLElement {
   _stopSpkHeartbeat() {
     if (this._spkHb) { clearInterval(this._spkHb); this._spkHb = null; }
     if (this._spkEqHb) { clearInterval(this._spkEqHb); this._spkEqHb = null; }
+  }
+
+  // --- Main WS tab-specific polling (like aibox-webui-card.js) ---
+  _stopTabPolling() {
+    if (this._mainWsPoll) { clearInterval(this._mainWsPoll); this._mainWsPoll = null; }
+  }
+
+  _startTabPolling(tab) {
+    this._stopTabPolling();
+    if (this._isDomainMode()) return; // Domain mode: no WS
+    if (tab === "media") {
+      this._mainWsPoll = setInterval(() => {
+        this._sendWs({ action: "get_info" });
+        this._sendWs({ action: "get_playback_state" });
+      }, 5000);
+    } else if (tab === "control") {
+      this._mainWsPoll = setInterval(() => {
+        this._sendWs({ action: "get_info" });
+        this._sendWs({ action: "led_get_state" });
+        this._sendWs({ action: "custom_ai_get_enabled" });
+        this._sendWs({ action: "voice_id_get" });
+      }, 5000);
+    } else if (tab === "system") {
+      this._mainWsPoll = setInterval(() => {
+        this._sendWs({ action: "get_info" });
+        this._sendWs({ action: "get_device_info" });
+      }, 3000);
+    } else if (tab === "chat") {
+      this._mainWsPoll = setInterval(() => {
+        this._sendWs({ action: "get_info" });
+        this._sendWs({ action: "chat_get_state" });
+      }, 5000);
+    }
   }
 
   // Send to main AiboxPlus WS (port 8082)
@@ -6675,6 +6711,8 @@ class PhicommR1Card extends HTMLElement {
     }
     // Load current tab data via WS
     this._wsLoadTab(this._activeTab);
+    // Start tab-specific main WS polling for real-time sync
+    this._startTabPolling(this._activeTab);
   }
 
   _wsLoadTab(tab) {
@@ -7014,6 +7052,7 @@ class PhicommR1Card extends HTMLElement {
       el.addEventListener("click", () => {
         this._activeTab = el.dataset.tab || "media";
         this._wsLoadTab(this._activeTab);
+        this._startTabPolling(this._activeTab);
         this._veGiaoDien();
       });
     });
@@ -7425,7 +7464,7 @@ class PhicommR1Card extends HTMLElement {
         const desired = Boolean(ev.target.checked);
         this._antiDeafEnabled = desired;
         this._datCongTacCho("anti_deaf_enabled", desired, 8000);
-        this._sendWs({ action: "anti_deaf_ai_set_enabled", enabled: desired });
+        this._sendWs({ action: "custom_ai_set_enabled", enabled: desired });
         this._dichVuDieuKhien("phicomm_r1", "anti_deaf_ai_set_enabled", {
           enabled: desired,
         }).catch(() => {});
