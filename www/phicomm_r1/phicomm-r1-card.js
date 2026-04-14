@@ -233,12 +233,6 @@ class PhicommR1Card extends HTMLElement {
       host: "",                    // Device LAN IP (overrides entity attribute)
       ws_port: 8082,               // Main WS port (AiboxPlus)
       speaker_port: 8080,          // Speaker WS port
-      tunnel_host: "",             // WSS tunnel host for domain mode
-      tunnel_port: 443,            // WSS tunnel port
-      tunnel_path: "/",            // WSS tunnel path
-      speaker_tunnel_host: "",     // Speaker tunnel host (if different)
-      speaker_tunnel_port: 443,
-      speaker_tunnel_path: "/",
       reconnect_ms: 1500,          // WS reconnect delay
       connect_timeout_ms: 2500,    // WS connect timeout
       // --- Existing settings ---
@@ -250,18 +244,12 @@ class PhicommR1Card extends HTMLElement {
       max_height: maxHeight,
     };
 
-    // Parse rooms config (now includes tunnel settings per room)
+    // Parse rooms config
     this._rooms = Array.isArray(this._config.rooms) && this._config.rooms.length
       ? this._config.rooms.map((r, i) => ({
           name: r.name || `Loa ${i + 1}`,
           entity: (r.entity || "").trim(),
           host: (r.host || "").trim(),
-          tunnel_host: (r.tunnel_host || "").trim(),
-          tunnel_port: Number(r.tunnel_port || 443),
-          tunnel_path: (r.tunnel_path || "/").trim() || "/",
-          speaker_tunnel_host: (r.speaker_tunnel_host || "").trim(),
-          speaker_tunnel_port: Number(r.speaker_tunnel_port || 443),
-          speaker_tunnel_path: (r.speaker_tunnel_path || "/").trim() || "/",
         }))
       : null;
     if (this._rooms) {
@@ -341,7 +329,8 @@ class PhicommR1Card extends HTMLElement {
       this._resolveConnectionMode();
       this._resolveDeviceHost();
       this._veGiaoDien();
-      // Start WS connection (works in both LAN and Domain+tunnel mode)
+      // LAN mode: start WS connection directly to speaker
+      // Domain mode: no WS — custom_components/phicomm_r1 is the bridge
       this._connectWsAuto();
     }
 
@@ -5927,7 +5916,7 @@ class PhicommR1Card extends HTMLElement {
     this._cuonCuoiKhungChat();
 
     try {
-      // WS path (LAN and Domain+tunnel)
+      // WS path (LAN mode — no-op in domain mode)
       this._sendWs({ action: "chat_send_text", text });
       // HA service path (domain mode)
       if (this._isDomainMode()) {
@@ -5946,7 +5935,7 @@ class PhicommR1Card extends HTMLElement {
     if (now - this._lastControlStateRequestAt < 7000) return;
     this._lastControlStateRequestAt = now;
     try {
-      // WS requests (works in both LAN and Domain+tunnel)
+      // WS requests (LAN mode — no-op in domain mode)
       this._sendWs({ action: "wake_word_get_enabled" });
       this._sendWs({ action: "wake_word_get_sensitivity" });
       this._sendWs({ action: "custom_ai_get_enabled" });
@@ -5973,7 +5962,7 @@ class PhicommR1Card extends HTMLElement {
     if (now - this._lastSystemStateRequestAt < 7000) return;
     this._lastSystemStateRequestAt = now;
     try {
-      // WS requests (works in both LAN and Domain+tunnel)
+      // WS requests (LAN mode only — no-op in domain mode)
       this._sendWs({ action: "mac_get" });
       this._sendWs({ action: "ota_get" });
       this._sendWs({ action: "hass_get" });
@@ -6428,7 +6417,7 @@ class PhicommR1Card extends HTMLElement {
     }
   }
 
-  // --- URL Builders ---
+  // --- URL Builders (LAN only — domain mode uses HA services as bridge) ---
 
   _lanMainWsUrl() {
     return `ws://${this._deviceHost}:${this._config.ws_port}`;
@@ -6438,72 +6427,23 @@ class PhicommR1Card extends HTMLElement {
     return `ws://${this._deviceHost}:${this._config.speaker_port}`;
   }
 
-  _tunnelMainWsUrl() {
-    const room = this._rooms?.[this._currentRoomIdx];
-    const host = room?.tunnel_host || this._config.tunnel_host;
-    if (!host) return "";
-    const port = Number(room?.tunnel_port || this._config.tunnel_port) || 443;
-    const path = room?.tunnel_path || this._config.tunnel_path || "/";
-    const base = `wss://${host}${port === 443 ? "" : ":" + port}${path.startsWith("/") ? path : "/" + path}`;
-    const ip = this._deviceHost;
-    if (ip) return base + (base.includes("?") ? "&" : "?") + "ip=" + encodeURIComponent(ip);
-    return base;
-  }
-
-  _tunnelSpkWsUrl() {
-    const room = this._rooms?.[this._currentRoomIdx];
-    const host = room?.speaker_tunnel_host || this._config.speaker_tunnel_host || room?.tunnel_host || this._config.tunnel_host;
-    if (!host) return "";
-    const port = Number(room?.speaker_tunnel_port || this._config.speaker_tunnel_port || room?.tunnel_port || this._config.tunnel_port) || 443;
-    const path = room?.speaker_tunnel_path || this._config.speaker_tunnel_path || room?.tunnel_path || this._config.tunnel_path || "/";
-    const base = `wss://${host}${port === 443 ? "" : ":" + port}${path.startsWith("/") ? path : "/" + path}`;
-    const ip = this._deviceHost;
-    if (ip) return base + (base.includes("?") ? "&" : "?") + "ip=" + encodeURIComponent(ip);
-    return base;
-  }
-
-  // --- Candidate Building (like aibox-webui-card.js) ---
+  // --- Candidate Building ---
+  // LAN mode: direct WS to speaker
+  // Domain mode: NO WS — all commands via HA service → custom_components → LAN → speaker
 
   _buildCandidates() {
-    const mode = (this._config.mode || "auto").toLowerCase();
-    const https = this._isHttps();
-    const list = [];
-    if (mode === "lan") {
-      if (https) {
-        // HTTPS + LAN mode: browser blocks ws:// from https://, need tunnel
-        const t = this._tunnelMainWsUrl();
-        if (t) list.push({ url: t, label: "TUNNEL WSS" });
-        else this._toast("HTTPS: cần cấu hình tunnel_host", "error");
-      } else {
-        list.push({ url: this._lanMainWsUrl(), label: "LAN WS" });
-      }
-    } else if (mode === "domain") {
-      // Domain mode: prefer tunnel WS if available, otherwise entity-only
-      const t = this._tunnelMainWsUrl();
-      if (t) list.push({ url: t, label: "TUNNEL WSS" });
-      // If no tunnel, domain mode works via entity sync (no direct WS)
-    } else {
-      // Auto mode
-      if (https) {
-        const t = this._tunnelMainWsUrl();
-        if (t) list.push({ url: t, label: "TUNNEL WSS" });
-      } else {
-        list.push({ url: this._lanMainWsUrl(), label: "LAN WS" });
-      }
-    }
-    return list;
+    // Domain mode: no WS candidates — everything goes through HA services
+    if (this._isDomainMode()) return [];
+    // LAN mode: direct WS
+    if (!this._deviceHost) return [];
+    return [{ url: this._lanMainWsUrl(), label: "LAN WS" }];
   }
 
   _buildSpkCandidates() {
-    const https = this._isHttps();
-    const list = [];
-    if (https) {
-      const t = this._tunnelSpkWsUrl();
-      if (t) list.push({ url: t, label: "SPK TUNNEL WSS" });
-    } else {
-      list.push({ url: this._lanSpkWsUrl(), label: "SPK LAN WS" });
-    }
-    return list;
+    // Domain mode: no speaker WS — HA service bridge handles it
+    if (this._isDomainMode()) return [];
+    if (!this._deviceHost) return [];
+    return [{ url: this._lanSpkWsUrl(), label: "SPK LAN WS" }];
   }
 
   // --- Device Host Resolution ---
@@ -6537,22 +6477,17 @@ class PhicommR1Card extends HTMLElement {
   // --- Connection Flow (aibox-webui-card.js pattern) ---
 
   _connectWsAuto() {
+    // Domain mode: NO WS connection — all via HA services (custom_components bridge)
+    if (this._isDomainMode()) return;
     if (this._switching) return;
     if (this._mainWs && (this._mainWs.readyState === 0 || this._mainWs.readyState === 1)) return;
     clearTimeout(this._reconnectTimer);
     if (!this._deviceHost) {
-      if (!this._resolveDeviceHost()) {
-        // In domain mode without tunnel, this is OK - entity sync handles it
-        if (this._isDomainMode()) return;
-        return;
-      }
+      if (!this._resolveDeviceHost()) return;
     }
     const candidates = this._buildCandidates();
     if (!candidates.length) {
       this._mainWsConnected = false;
-      // In domain mode, no WS is fine - entity sync handles everything
-      if (this._isDomainMode()) return;
-      this._toast(this._isHttps() ? "HTTPS: cần cấu hình tunnel_host" : "Chưa có host", "error");
       return;
     }
     this._doTry(candidates, 0, 1);
@@ -6629,6 +6564,8 @@ class PhicommR1Card extends HTMLElement {
   // --- Speaker WS Connection ---
 
   _connectSpkWs() {
+    // Domain mode: no speaker WS — HA service bridge handles audio control
+    if (this._isDomainMode()) return;
     if (this._switching) return;
     if (this._spkWs && (this._spkWs.readyState === 0 || this._spkWs.readyState === 1)) return;
     clearTimeout(this._spkReconnect);
