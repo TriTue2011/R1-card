@@ -6650,27 +6650,19 @@ class PhicommR1Card extends HTMLElement {
   _startTabPolling(tab) {
     this._stopTabPolling();
     if (this._isDomainMode()) return; // Domain mode: no WS
-    if (tab === "media") {
+    // Only poll requests with selective DOM handlers (no full re-render).
+    // Speaker WS heartbeat (2-3s) already handles volume, toggles, EQ, CPU/RAM.
+    // Main WS poll only covers state not available via speaker WS.
+    if (tab === "control") {
+      // led_get_state: selective DOM update via _layTrangThaiCongTac + el.checked, safe
       this._mainWsPoll = setInterval(() => {
-        this._sendWs({ action: "get_info" });
-        this._sendWs({ action: "get_playback_state" });
-      }, 5000);
-    } else if (tab === "control") {
-      this._mainWsPoll = setInterval(() => {
-        this._sendWs({ action: "get_info" });
         this._sendWs({ action: "led_get_state" });
-        this._sendWs({ action: "custom_ai_get_enabled" });
-        this._sendWs({ action: "voice_id_get" });
       }, 5000);
-    } else if (tab === "system") {
+    } else if (tab === "media") {
+      // get_playback_state: selective updates via _dongBoTienDoDom,
+      // only full re-render on title change (not position ticks)
       this._mainWsPoll = setInterval(() => {
-        this._sendWs({ action: "get_info" });
-        this._sendWs({ action: "get_device_info" });
-      }, 3000);
-    } else if (tab === "chat") {
-      this._mainWsPoll = setInterval(() => {
-        this._sendWs({ action: "get_info" });
-        this._sendWs({ action: "chat_get_state" });
+        this._sendWs({ action: "get_playback_state" });
       }, 5000);
     }
   }
