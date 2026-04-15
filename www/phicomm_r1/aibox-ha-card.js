@@ -3159,7 +3159,6 @@ window.customCards.push({ type: "aibox-ha-card", name: "AI BOX HA Card", descrip
 
   console.log(`%c AI BOX HA Card [${BUILD_TS}] — base: aibox-webui-card + HTTPS custom_ws_url/custom_speaker_ws_url`, "color:#a78bfa;font-weight:bold;font-size:11px");
 })();
-=======
 const PhicommBaseCard = customElements.get("phicomm-r1-card");
 
 if (!PhicommBaseCard) {
