@@ -1330,10 +1330,7 @@ class AiBoxCard extends HTMLElement {
       if (s.music_light_luma !== undefined) this._state.brightness = Math.max(1, Math.min(200, Math.round(s.music_light_luma)));
       if (s.music_light_chroma !== undefined) this._state.speed = Math.max(1, Math.min(100, Math.round(s.music_light_chroma)));
       if (s.music_light_mode !== undefined) this._state.lightMode = s.music_light_mode;
-      const edgeLight = s.edge_light || s.edgeLight || {};
-      if (edgeLight.enabled !== undefined) this._state.edgeOn = !!edgeLight.enabled;
-      if (edgeLight.intensity !== undefined) this._state.edgeInt = Math.max(0, Math.min(100, Math.round(edgeLight.intensity)));
-      this._renderControlToggles(); this._renderLight(); this._renderEdgeLight();
+      this._renderControlToggles(); this._renderLight();
     }
     const isEqResponse = d.type === "get_eq_config" || d.code === 200;
     const audioOk = isEqResponse || (Date.now() - this._audioGuard > 3000);
@@ -1533,6 +1530,19 @@ class AiBoxCard extends HTMLElement {
   _fmtTime(s) { s = Math.max(0, Math.floor(Number(s || 0))); return `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`; }
   _esc(s) { return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
   _dbStr(v) { const d = v - 231; return (d >= 0 ? "+" : "") + d + " dB"; }
+
+  _applySurround(width) {
+    // Surround = EQ + loudness combo (matched from AiBox web UI F12 capture)
+    // Width 0→100 scales: band0=-8w, band1=-7w, band2=-9w, band3=+11w, band4=+14w, gain=+8w
+    const w = Math.max(0, Math.min(100, width));
+    const bands = [Math.round(-8*w), Math.round(-7*w), Math.round(-9*w), Math.round(11*w), Math.round(14*w)];
+    const gain = Math.round(8*w);
+    bands.forEach((lv, i) => this._sendSpk({ type: "set_eq_bandlevel", band: i, level: lv }));
+    this._sendSpk({ type: "set_loudness_enable", enable: true });
+    this._sendSpk({ type: "set_loudness_gain", gain: gain });
+    this._sendSpk({ type: "set_eq_enable", enable: true });
+  }
+
   _setConnDot(on) { const d = this.querySelector("#connDot"); if (d) d.classList.toggle("on", !!on); }
   _setConnText(t) { const el = this.querySelector("#connText"); if (el) el.textContent = t || "WS"; }
 
@@ -2370,12 +2380,13 @@ select.form-inp{cursor:pointer}
     this._bindSlider("#speedSlider", "#speedVal", v => { this._ctrlGuard = Date.now(); this._sendSpkMsg(66, v); }, v => v);
     this._bindSwitch("#swEdge", () => {
       this._ctrlGuard = Date.now(); this._state.edgeOn = !this._state.edgeOn;
-      this._send({ action: "set_edge_light", enabled: this._state.edgeOn, intensity: this._state.edgeInt });
+      this._sendSpk({ type_id: 'Turn on light', type: 'shell', shell: this._state.edgeOn ? 'lights_test set 7fffff8000 ffffff' : 'lights_test set 7fffff8000 0' });
       this._updateSwitch("#swEdge", this._state.edgeOn);
     });
     this._bindSlider("#edgeSlider", "#edgeVal", v => {
       this._ctrlGuard = Date.now(); this._state.edgeInt = v;
-      this._send({ action: "set_edge_light", enabled: this._state.edgeOn, intensity: v });
+      const h = Math.round((v / 100) * 255).toString(16).padStart(2, '0');
+      this._sendSpk({ type_id: 'Turn on light', type: 'shell', shell: `lights_test set 7fffff8000 ${h}${h}${h}` });
     }, v => v + "%");
     this.querySelectorAll("[data-lmode]").forEach(b => { b.onclick = () => { const mode = parseInt(b.dataset.lmode); this._sendSpkMsg(67, mode); this._state.lightMode = mode; }; });
     this.querySelectorAll("[data-atab]").forEach(b => { b.onclick = () => {
@@ -2398,14 +2409,14 @@ select.form-inp{cursor:pointer}
     this._bindSlider("#loudSlider", "#loudVal", v => { this._audioGuard = Date.now(); this._sendSpk({ type: "set_loudness_gain", gain: parseInt(v) }); }, v => (v / 100).toFixed(1) + " dB");
     this._bindSlider("#bvSlider", "#bvVal", v => { this._audioGuard = Date.now(); this._sendSpk({ type: "sends", list: [{ type: "setMixerValue", controlName: "DAC Digital Volume L", value: String(v) }, { type: "get_eq_config" }] }); }, v => this._dbStr(v));
     this._bindSlider("#hvSlider", "#hvVal", v => { this._audioGuard = Date.now(); this._sendSpk({ type: "sends", list: [{ type: "setMixerValue", controlName: "DAC Digital Volume R", value: String(v) }, { type: "get_eq_config" }] }); }, v => this._dbStr(v));
-    this._bindSlider("#surW", "#surWVal", v => { this._audioGuard = Date.now(); this._sendSpkMsg(60, v); }, v => v);
-    this._bindSlider("#surP", "#surPVal", v => { this._audioGuard = Date.now(); this._sendSpkMsg(61, v); }, v => v);
-    this._bindSlider("#surS", "#surSVal", v => { this._audioGuard = Date.now(); this._sendSpkMsg(62, v); }, v => v);
+    this._bindSlider("#surW", "#surWVal", v => { this._audioGuard = Date.now(); this._applySurround(parseInt(v)); }, v => v);
+    this._bindSlider("#surP", "#surPVal", v => { this._audioGuard = Date.now(); }, v => v);
+    this._bindSlider("#surS", "#surSVal", v => { this._audioGuard = Date.now(); }, v => v);
     this.querySelectorAll("[data-sur]").forEach(b => { b.onclick = () => {
       this._audioGuard = Date.now(); let w, p, s;
       if (b.dataset.sur === "cinema") { w=70; p=50; s=30; } else if (b.dataset.sur === "wide") { w=90; p=40; s=60; } else { w=40; p=30; s=10; }
       this._setSlider("#surW", "#surWVal", w); this._setSlider("#surP", "#surPVal", p); this._setSlider("#surS", "#surSVal", s);
-      this._sendSpkMsg(60, w); this._sendSpkMsg(61, p); this._sendSpkMsg(62, s);
+      this._applySurround(w);
     }; });
 
     this._bindSwitch("#swWake", () => { const en = !this._state.wakeWordEnabled; this._state.wakeWordEnabled = en; this._send({ action: "wake_word_set_enabled", enabled: en }); this._renderWakeWord(); });
@@ -2590,14 +2601,6 @@ select.form-inp{cursor:pointer}
     if (d.type === "chat_background" || d.type === "chat_background_result") { this._state.chatBg64 = d.image || d.base64 || ""; this._renderChatBg(); return; }
     if (d.type === "tiktok_reply_state" || d.type === "tiktok_reply_result") { this._state.tiktokReply = !!d.enabled; this._renderTikTok(); return; }
     if (d.type === "led_state" || d.type === "led_get_state_result" || d.type === "led_toggle_result") { if (d.enabled !== undefined) this._state.ledEnabled = !!d.enabled; this._renderControlToggles(); return; }
-    if (d.type === "set_edge_light_result" || d.type === "edge_light_state") {
-      if (d.enabled !== undefined) this._state.edgeOn = !!d.enabled;
-      if (d.intensity !== undefined) this._state.edgeInt = Math.max(0, Math.min(100, Math.round(d.intensity)));
-      this._updateSwitch("#swEdge", this._state.edgeOn);
-      const es = this.querySelector("#edgeSlider"), ev = this.querySelector("#edgeVal");
-      if (es) es.value = this._state.edgeInt; if (ev) ev.textContent = this._state.edgeInt + "%";
-      return;
-    }
     if (d.type === "ota_config" || d.type === "ota_get_result" || d.type === "ota_set_result") { if (d.ota_url !== undefined) this._state.otaUrl = d.ota_url; if (Array.isArray(d.options)) this._state.otaOptions = d.options; this._renderOta(); return; }
     if (d.type === "hass_config" || d.type === "hass_get_result" || d.type === "hass_set_result") { this._state.hassUrl = d.url || ""; this._state.hassAgentId = d.agent_id || ""; this._state.hassConfigured = !!d.configured; if (d.api_key === "***") this._state.hassApiKeyMasked = true; this._renderHass(); return; }
     if (d.type === "wifi_scan_result") { this._state.wifiNetworks = d.networks || []; this._renderWifiScan(); return; }
