@@ -1330,10 +1330,7 @@ class AiBoxCard extends HTMLElement {
       if (s.music_light_luma !== undefined) this._state.brightness = Math.max(1, Math.min(200, Math.round(s.music_light_luma)));
       if (s.music_light_chroma !== undefined) this._state.speed = Math.max(1, Math.min(100, Math.round(s.music_light_chroma)));
       if (s.music_light_mode !== undefined) this._state.lightMode = s.music_light_mode;
-      const edgeLight = s.edge_light || s.edgeLight || {};
-      if (edgeLight.enabled !== undefined) this._state.edgeOn = !!edgeLight.enabled;
-      if (edgeLight.intensity !== undefined) this._state.edgeInt = Math.max(0, Math.min(100, Math.round(edgeLight.intensity)));
-      this._renderControlToggles(); this._renderLight(); this._renderEdgeLight();
+      this._renderControlToggles(); this._renderLight();
     }
     const isEqResponse = d.type === "get_eq_config" || d.code === 200;
     const audioOk = isEqResponse || (Date.now() - this._audioGuard > 3000);
@@ -2370,12 +2367,13 @@ select.form-inp{cursor:pointer}
     this._bindSlider("#speedSlider", "#speedVal", v => { this._ctrlGuard = Date.now(); this._sendSpkMsg(66, v); }, v => v);
     this._bindSwitch("#swEdge", () => {
       this._ctrlGuard = Date.now(); this._state.edgeOn = !this._state.edgeOn;
-      this._send({ action: "set_edge_light", enabled: this._state.edgeOn, intensity: this._state.edgeInt });
+      this._sendSpk({ type_id: 'Turn on light', type: 'shell', shell: this._state.edgeOn ? 'lights_test set 7fffff8000 ffffff' : 'lights_test set 7fffff8000 0' });
       this._updateSwitch("#swEdge", this._state.edgeOn);
     });
     this._bindSlider("#edgeSlider", "#edgeVal", v => {
       this._ctrlGuard = Date.now(); this._state.edgeInt = v;
-      this._send({ action: "set_edge_light", enabled: this._state.edgeOn, intensity: v });
+      const h = Math.round((v / 100) * 255).toString(16).padStart(2, '0');
+      this._sendSpk({ type_id: 'Turn on light', type: 'shell', shell: `lights_test set 7fffff8000 ${h}${h}${h}` });
     }, v => v + "%");
     this.querySelectorAll("[data-lmode]").forEach(b => { b.onclick = () => { const mode = parseInt(b.dataset.lmode); this._sendSpkMsg(67, mode); this._state.lightMode = mode; }; });
     this.querySelectorAll("[data-atab]").forEach(b => { b.onclick = () => {
@@ -2590,14 +2588,6 @@ select.form-inp{cursor:pointer}
     if (d.type === "chat_background" || d.type === "chat_background_result") { this._state.chatBg64 = d.image || d.base64 || ""; this._renderChatBg(); return; }
     if (d.type === "tiktok_reply_state" || d.type === "tiktok_reply_result") { this._state.tiktokReply = !!d.enabled; this._renderTikTok(); return; }
     if (d.type === "led_state" || d.type === "led_get_state_result" || d.type === "led_toggle_result") { if (d.enabled !== undefined) this._state.ledEnabled = !!d.enabled; this._renderControlToggles(); return; }
-    if (d.type === "set_edge_light_result" || d.type === "edge_light_state") {
-      if (d.enabled !== undefined) this._state.edgeOn = !!d.enabled;
-      if (d.intensity !== undefined) this._state.edgeInt = Math.max(0, Math.min(100, Math.round(d.intensity)));
-      this._updateSwitch("#swEdge", this._state.edgeOn);
-      const es = this.querySelector("#edgeSlider"), ev = this.querySelector("#edgeVal");
-      if (es) es.value = this._state.edgeInt; if (ev) ev.textContent = this._state.edgeInt + "%";
-      return;
-    }
     if (d.type === "ota_config" || d.type === "ota_get_result" || d.type === "ota_set_result") { if (d.ota_url !== undefined) this._state.otaUrl = d.ota_url; if (Array.isArray(d.options)) this._state.otaOptions = d.options; this._renderOta(); return; }
     if (d.type === "hass_config" || d.type === "hass_get_result" || d.type === "hass_set_result") { this._state.hassUrl = d.url || ""; this._state.hassAgentId = d.agent_id || ""; this._state.hassConfigured = !!d.configured; if (d.api_key === "***") this._state.hassApiKeyMasked = true; this._renderHass(); return; }
     if (d.type === "wifi_scan_result") { this._state.wifiNetworks = d.networks || []; this._renderWifiScan(); return; }
