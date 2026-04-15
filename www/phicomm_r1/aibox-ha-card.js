@@ -1530,6 +1530,19 @@ class AiBoxCard extends HTMLElement {
   _fmtTime(s) { s = Math.max(0, Math.floor(Number(s || 0))); return `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`; }
   _esc(s) { return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
   _dbStr(v) { const d = v - 231; return (d >= 0 ? "+" : "") + d + " dB"; }
+
+  _applySurround(width) {
+    // Surround = EQ + loudness combo (matched from AiBox web UI F12 capture)
+    // Width 0→100 scales: band0=-8w, band1=-7w, band2=-9w, band3=+11w, band4=+14w, gain=+8w
+    const w = Math.max(0, Math.min(100, width));
+    const bands = [Math.round(-8*w), Math.round(-7*w), Math.round(-9*w), Math.round(11*w), Math.round(14*w)];
+    const gain = Math.round(8*w);
+    bands.forEach((lv, i) => this._sendSpk({ type: "set_eq_bandlevel", band: i, level: lv }));
+    this._sendSpk({ type: "set_loudness_enable", enable: true });
+    this._sendSpk({ type: "set_loudness_gain", gain: gain });
+    this._sendSpk({ type: "set_eq_enable", enable: true });
+  }
+
   _setConnDot(on) { const d = this.querySelector("#connDot"); if (d) d.classList.toggle("on", !!on); }
   _setConnText(t) { const el = this.querySelector("#connText"); if (el) el.textContent = t || "WS"; }
 
@@ -2396,14 +2409,14 @@ select.form-inp{cursor:pointer}
     this._bindSlider("#loudSlider", "#loudVal", v => { this._audioGuard = Date.now(); this._sendSpk({ type: "set_loudness_gain", gain: parseInt(v) }); }, v => (v / 100).toFixed(1) + " dB");
     this._bindSlider("#bvSlider", "#bvVal", v => { this._audioGuard = Date.now(); this._sendSpk({ type: "sends", list: [{ type: "setMixerValue", controlName: "DAC Digital Volume L", value: String(v) }, { type: "get_eq_config" }] }); }, v => this._dbStr(v));
     this._bindSlider("#hvSlider", "#hvVal", v => { this._audioGuard = Date.now(); this._sendSpk({ type: "sends", list: [{ type: "setMixerValue", controlName: "DAC Digital Volume R", value: String(v) }, { type: "get_eq_config" }] }); }, v => this._dbStr(v));
-    this._bindSlider("#surW", "#surWVal", v => { this._audioGuard = Date.now(); this._sendSpkMsg(60, v); }, v => v);
-    this._bindSlider("#surP", "#surPVal", v => { this._audioGuard = Date.now(); this._sendSpkMsg(61, v); }, v => v);
-    this._bindSlider("#surS", "#surSVal", v => { this._audioGuard = Date.now(); this._sendSpkMsg(62, v); }, v => v);
+    this._bindSlider("#surW", "#surWVal", v => { this._audioGuard = Date.now(); this._applySurround(parseInt(v)); }, v => v);
+    this._bindSlider("#surP", "#surPVal", v => { this._audioGuard = Date.now(); }, v => v);
+    this._bindSlider("#surS", "#surSVal", v => { this._audioGuard = Date.now(); }, v => v);
     this.querySelectorAll("[data-sur]").forEach(b => { b.onclick = () => {
       this._audioGuard = Date.now(); let w, p, s;
       if (b.dataset.sur === "cinema") { w=70; p=50; s=30; } else if (b.dataset.sur === "wide") { w=90; p=40; s=60; } else { w=40; p=30; s=10; }
       this._setSlider("#surW", "#surWVal", w); this._setSlider("#surP", "#surPVal", p); this._setSlider("#surS", "#surSVal", s);
-      this._sendSpkMsg(60, w); this._sendSpkMsg(61, p); this._sendSpkMsg(62, s);
+      this._applySurround(w);
     }; });
 
     this._bindSwitch("#swWake", () => { const en = !this._state.wakeWordEnabled; this._state.wakeWordEnabled = en; this._send({ action: "wake_word_set_enabled", enabled: en }); this._renderWakeWord(); });
