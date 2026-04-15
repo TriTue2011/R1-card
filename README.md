@@ -43,6 +43,7 @@ Sau đó vào **Settings -> Dashboards -> Resources -> Add resource**:
 - URL nhập: `/local/phicomm_r1/phicomm-r1-card.js`
 - Resource type: **JavaScript module** -> Save
 
+
 ### Tuỳ chọn: AI BOX HA card (full UI, gần giống aibox-webui-card.js)
 
 Nếu bạn muốn dùng bản full UI giống `aibox-webui-card.js` nhưng hỗ trợ domain/HTTPS qua custom endpoint:
@@ -50,6 +51,15 @@ Nếu bạn muốn dùng bản full UI giống `aibox-webui-card.js` nhưng hỗ
 - `www/phicomm_r1/aibox-ha-card.js` -> `config/www/phicomm_r1/aibox-ha-card.js`
 
 Sau đó add resource:
+
+### Tuỳ chọn: AI BOX card (phiên bản alias chạy qua integration)
+
+Nếu bạn muốn giữ tên card kiểu AI BOX (dễ migrate từ card cũ), copy thêm file:
+
+- `www/phicomm_r1/aibox-ha-card.js` -> `config/www/phicomm_r1/aibox-ha-card.js`
+
+Sau đó add thêm resource (đặt **sau** `phicomm-r1-card.js`):
+
 
 - URL: `/local/phicomm_r1/aibox-ha-card.js`
 - Type: **JavaScript module**
@@ -86,13 +96,18 @@ title: Phicomm R1
 max_height: 500px
 ```
 
+
 Hoặc dùng card mới:
+
+Hoặc dùng alias card mới:
+
 
 ```yaml
 type: custom:aibox-ha-card
 entity: media_player.phicomm_r1
 title: AI BOX
 ```
+
 
 `aibox-ha-card` hỗ trợ thêm:
 - `custom_ws_url` (HTTPS/domain main WS, ưu tiên trước tunnel)
