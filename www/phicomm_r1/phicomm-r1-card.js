@@ -36,6 +36,8 @@ class PhicommR1Card extends HTMLElement {
     this._activeTab = "media";
     this._mediaSearchTab = "songs";
     this._lightingTab = "main";
+    this._audioOpen = true;
+    this._audioSubTab = "eq";
 
     this._query = "";
     this._chatInput = "";
@@ -2899,46 +2901,59 @@ class PhicommR1Card extends HTMLElement {
     for (let i = 1; i <= 30; i++) {
       voiceOpts += `<option value="${i}" ${this._voiceId === i ? "selected" : ""}>${i}. ${VOICES[i]}</option>`;
     }
+    const audioOpen = this._audioOpen !== false;
     // alarm list is rendered dynamically by _renderAlarms()
     return `
       <section class="panel" aria-label="Control">
-        <div class="tile">
-          <div class="label-line">
-            <strong>Từ khóa đánh thức</strong>
+
+        <div class="ctrl-section">
+          <div class="section-label">📡 Control</div>
+
+          <div class="toggle-item">
+            <div class="toggle-left">
+              <div class="tog-name">🎙 Wake Word (Ô Kề Na Bu)</div>
+            </div>
             <label class="switch">
               <input id="wake-enabled" type="checkbox" ${this._wakeEnabled ? "checked" : ""} />
               <span class="slider"></span>
             </label>
           </div>
-          <div class="small">Độ nhạy đề xuất 0.95-0.99</div>
-          <div class="label-line">
-            <span>${this._wakeSensitivity.toFixed(2)}</span>
-            <button id="wake-refresh" class="mini-btn">Refresh</button>
-          </div>
-          <input id="wake-sensitivity" type="range" min="0" max="1" step="0.01" value="${this._wakeSensitivity}" ${!this._wakeEnabled ? "disabled" : ""} />
-        </div>
 
-        <div class="tile">
-          <div class="label-line">
-            <strong>Chống Điếc AI</strong>
+          <div class="slider-row">
+            <div class="slider-row-top">
+              <span class="s-name">Độ nhạy (nên để 0.95~0.99)</span>
+              <span class="s-val" id="wake-sensitivity-val">${this._wakeSensitivity.toFixed(2)}</span>
+            </div>
+            <input id="wake-sensitivity" type="range" min="0" max="1" step="0.01" value="${this._wakeSensitivity}" ${!this._wakeEnabled ? "disabled" : ""} style="width:100%" />
+            <div class="slider-hints"><span>Dễ kích hoạt</span><span>Khó kích hoạt</span></div>
+            <div class="fx jcb aic mt6">
+              <span style="font-size:10px;color:rgba(226,232,240,.5)">Giá trị hiện tại: <strong id="wake-sensitivity-display" style="color:#a78bfa">${this._wakeSensitivity.toFixed(2)}</strong></span>
+              <button id="wake-refresh" class="mini-btn">Refresh</button>
+            </div>
+          </div>
+
+          <div class="toggle-item">
+            <div class="toggle-left">
+              <div class="tog-name">🧠 Chống Điếc AI</div>
+              <div class="tog-desc">Tắt nếu dùng server Việt Ai Box. Khi bật: nhận diện giọng nói chuẩn 99%.</div>
+            </div>
             <label class="switch">
               <input id="ai-enabled" type="checkbox" ${this._antiDeafEnabled ? "checked" : ""} />
               <span class="slider"></span>
             </label>
           </div>
-          <div class="small">Khuyến nghị tắt nếu không dùng server Việt AI Box.</div>
         </div>
 
-        <div class="tile">
-          <div class="label-line"><strong>Chọn Giọng Nói AI</strong></div>
-          <div class="voice-row">
-            <select id="voice-sel" class="form-select">${voiceOpts}</select>
-            <button id="voice-preview" class="mini-btn">Play</button>
+        <div class="ctrl-section">
+          <div class="section-label">🎤 Chọn Giọng Nói AI</div>
+          <div class="fx g4 aic">
+            <select id="voice-sel" class="form-select" style="flex:1">${voiceOpts}</select>
+            <button id="voice-preview" class="mini-btn">▶ Play</button>
           </div>
         </div>
 
-        <div class="tile">
-          <div class="label-line"><strong>Chọn Model Live2D</strong></div>
+        <div class="ctrl-section">
+          <div class="section-label">👤 Chọn Model Live2D</div>
           <select id="live2d-sel" class="form-select">
             <option value="hiyori" ${this._live2dModel === "hiyori" ? "selected" : ""}>Hiyori</option>
             <option value="mao" ${this._live2dModel === "mao" ? "selected" : ""}>Mao</option>
@@ -2948,74 +2963,118 @@ class PhicommR1Card extends HTMLElement {
           </select>
         </div>
 
-        <div class="tile">
-          <div class="label-line">
-            <strong>Đèn LED Chờ</strong>
-            <label class="switch">
-              <input id="led-enabled" type="checkbox" ${this._ledEnabled ? "checked" : ""} />
-              <span class="slider"></span>
-            </label>
-          </div>
-          <div class="small">Tắt để đèn nháy theo nhạc khi phát</div>
-        </div>
-
-        <div class="tile">
-          <div class="label-line">
-            <strong>DLNA</strong>
+        <div class="ctrl-section">
+          <div class="toggle-item">
+            <div class="toggle-left">
+              <div class="tog-name">📡 DLNA</div>
+            </div>
             <label class="switch">
               <input id="dlna-enabled" type="checkbox" ${this._dlnaEnabled ? "checked" : ""} />
               <span class="slider"></span>
             </label>
           </div>
-          <div class="label-line">
-            <strong>AirPlay</strong>
+          <div class="toggle-item">
+            <div class="toggle-left">
+              <div class="tog-name">🍎 AirPlay</div>
+            </div>
             <label class="switch">
               <input id="airplay-enabled" type="checkbox" ${this._airplayEnabled ? "checked" : ""} />
               <span class="slider"></span>
             </label>
           </div>
-          <div class="label-line">
-            <strong>Bluetooth</strong>
+          <div class="toggle-item">
+            <div class="toggle-left">
+              <div class="tog-name">🔵 Bluetooth</div>
+            </div>
             <label class="switch">
               <input id="bluetooth-enabled" type="checkbox" ${this._bluetoothEnabled ? "checked" : ""} />
               <span class="slider"></span>
             </label>
           </div>
-        </div>
-
-        <div class="tile">
-          <div class="label-line"><strong>Surround Sound</strong></div>
-          <div class="label-line"><span>Width</span><strong id="sur-w-val">${this._surroundWidth}</strong></div>
-          <input id="sur-width" type="range" min="0" max="100" value="${this._surroundWidth}" />
-          <div class="label-line"><span>Presence</span><strong id="sur-p-val">${this._surroundPresence}</strong></div>
-          <input id="sur-presence" type="range" min="0" max="100" value="${this._surroundPresence}" />
-          <div class="label-line"><span>Space</span><strong id="sur-s-val">${this._surroundSpace}</strong></div>
-          <input id="sur-space" type="range" min="0" max="100" value="${this._surroundSpace}" />
-          <div class="actions-inline">
-            <button class="mini-btn sur-preset" data-sur="cinema">Cinema</button>
-            <button class="mini-btn sur-preset" data-sur="wide">Wide Space</button>
-            <button class="mini-btn sur-preset" data-sur="reset">Reset</button>
+          <div class="toggle-item">
+            <div class="toggle-left">
+              <div class="tog-name">💡 Đèn LED Chờ</div>
+              <div class="tog-desc">Tắt để đèn nháy theo nhạc khi phát</div>
+            </div>
+            <label class="switch">
+              <input id="led-enabled" type="checkbox" ${this._ledEnabled ? "checked" : ""} />
+              <span class="slider"></span>
+            </label>
           </div>
         </div>
 
-        <div class="tile">
-          <div class="label-line"><strong>Dải Trung-Cao (DAC Mixer)</strong></div>
-          <div class="label-line"><span>Âm trầm trung</span><strong id="dac-bv-val">${this._dbStr(this._dacBassVol)}</strong></div>
-          <input id="dac-bass-vol" type="range" min="211" max="251" value="${this._dacBassVol}" />
-          <div class="label-line"><span>Âm nốt cao</span><strong id="dac-hv-val">${this._dbStr(this._dacHighVol)}</strong></div>
-          <input id="dac-high-vol" type="range" min="211" max="251" value="${this._dacHighVol}" />
+        <div class="ctrl-section">
+          <div class="collapsible-header" id="audioCollHeader">
+            <span class="collapsible-title">🎛 Audio Engine</span>
+            <span class="collapsible-arrow ${audioOpen ? "open" : ""}" id="audioArrow">▼</span>
+          </div>
+          <div class="collapsible-body ${audioOpen ? "" : "closed"}" id="audioCollBody">
+            <div class="sub-tabs" style="margin-top:6px">
+              <button class="sub-tab ${this._audioSubTab !== "sur" ? "active" : ""}" data-audio-subtab="eq">Equalizer</button>
+              <button class="sub-tab ${this._audioSubTab === "sur" ? "active" : ""}" data-audio-subtab="sur">Surround</button>
+            </div>
+
+            <div id="audioEqPane" class="${this._audioSubTab === "sur" ? "hidden" : ""}">
+              <div class="slider-row">
+                <div class="slider-row-top">
+                  <span class="s-name">🔊 Dải Trung-Cao – Âm trầm trung</span>
+                  <span class="s-val" id="dac-bv-val">${this._dbStr(this._dacBassVol)}</span>
+                </div>
+                <input id="dac-bass-vol" type="range" min="211" max="251" value="${this._dacBassVol}" style="width:100%" />
+                <div class="slider-hints"><span>-20 dB</span><span>0 dB</span><span>+20 dB</span></div>
+              </div>
+              <div class="slider-row">
+                <div class="slider-row-top">
+                  <span class="s-name">🔊 Dải Trung-Cao – Âm nốt cao</span>
+                  <span class="s-val" id="dac-hv-val">${this._dbStr(this._dacHighVol)}</span>
+                </div>
+                <input id="dac-high-vol" type="range" min="211" max="251" value="${this._dacHighVol}" style="width:100%" />
+                <div class="slider-hints"><span>-20 dB</span><span>0 dB</span><span>+20 dB</span></div>
+              </div>
+            </div>
+
+            <div id="audioSurPane" class="${this._audioSubTab === "sur" ? "" : "hidden"}">
+              <div class="slider-row">
+                <div class="slider-row-top">
+                  <span class="s-name">↔ Width</span>
+                  <span class="s-val" id="sur-w-val">${this._surroundWidth}</span>
+                </div>
+                <input id="sur-width" type="range" min="0" max="100" value="${this._surroundWidth}" style="width:100%" />
+              </div>
+              <div class="slider-row">
+                <div class="slider-row-top">
+                  <span class="s-name">🎯 Presence</span>
+                  <span class="s-val" id="sur-p-val">${this._surroundPresence}</span>
+                </div>
+                <input id="sur-presence" type="range" min="0" max="100" value="${this._surroundPresence}" style="width:100%" />
+              </div>
+              <div class="slider-row">
+                <div class="slider-row-top">
+                  <span class="s-name">🌌 Space</span>
+                  <span class="s-val" id="sur-s-val">${this._surroundSpace}</span>
+                </div>
+                <input id="sur-space" type="range" min="0" max="100" value="${this._surroundSpace}" style="width:100%" />
+              </div>
+              <div class="preset-row">
+                <button class="preset-btn sur-preset" data-sur="cinema">🎬 Cinema</button>
+                <button class="preset-btn sur-preset" data-sur="wide">🌌 Wide Space</button>
+                <button class="preset-btn sur-preset" data-sur="reset">↺ Reset</button>
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div class="tile">
-          <div class="label-line">
-            <strong>⏰ Báo thức</strong>
-            <div class="alarm-header-actions">
+        <div class="ctrl-section">
+          <div class="fx jcb aic mb6">
+            <div class="section-label" style="margin:0">⏰ Báo thức</div>
+            <div class="fx g4">
               <button id="alarm-add" class="mini-btn">+ Thêm</button>
               <button id="alarm-refresh" class="mini-btn">🔄</button>
             </div>
           </div>
           <div id="alarm-list"></div>
         </div>
+
       </section>
     `;
   }
@@ -3142,172 +3201,164 @@ class PhicommR1Card extends HTMLElement {
     ];
     return `
       <section class="panel panel-system" aria-label="System">
-        <div class="tile">
-          <div class="audio-engine-shell">
-            <div class="audio-engine-head">
-              <div class="audio-engine-title-wrap">
-                <div class="audio-engine-icon">
-                  <ha-icon icon="mdi:tune-vertical-variant"></ha-icon>
-                </div>
-                <div class="audio-engine-copy">
-                  <strong>Bộ âm thanh</strong>
-                  <span>Bộ cân bằng đồng bộ trực tiếp với loa</span>
-                </div>
-              </div>
-              <div class="audio-engine-actions">
-                <div class="audio-engine-tabs">
-                  <button type="button" class="audio-engine-tab active">Equalizer</button>
-                </div>
-                <label class="switch">
-                  <input id="eq-enabled" type="checkbox" ${this._eqEnabled ? "checked" : ""} />
-                  <span class="slider"></span>
-                </label>
-              </div>
-            </div>
 
-            <div class="audio-engine-meta">
-              <span id="eq-status-chip" class="audio-engine-chip ${this._eqEnabled ? "" : "is-off"}">
-                ${this._eqEnabled ? "EQ bật" : "EQ tắt"}
-              </span>
-              <span class="audio-engine-hint">Kéo từng dải tần rồi thả ra để gửi xuống loa</span>
-            </div>
-
-            <div class="eq-vertical-shell">
-              ${Array.from({ length: eqBandColumns }, (_, index) => {
-                const value = this._layEqLevelTheoBand(index, 0);
-                return `
-                  <div class="eq-band-column">
-                    <div class="eq-band-level" data-eq-value="${index}">${this._dinhDangEqLevel(value)}</div>
-                    <div class="eq-band-slider-wrap">
-                      <input
-                        id="eq-slider-${index}"
-                        class="eq-vertical-slider"
-                        data-eq-band="${index}"
-                        type="range"
-                        min="-1500"
-                        max="1500"
-                        step="100"
-                        value="${value}"
-                        orient="vertical"
-                      />
-                    </div>
-                    <div class="eq-band-name ${index === this._eqBand ? "is-active" : ""}" data-eq-name="${index}">
-                      ${this._maHoaHtml(this._layNhanEqBand(index))}
-                    </div>
+        <!-- EQ -->
+        <div class="sys-info-item mb6">
+          <div class="fx jcb aic mb6">
+            <div class="sys-label">🎚 Equalizer</div>
+            <label class="switch">
+              <input id="eq-enabled" type="checkbox" ${this._eqEnabled ? "checked" : ""} />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="eq-vertical-shell">
+            ${Array.from({ length: eqBandColumns }, (_, index) => {
+              const value = this._layEqLevelTheoBand(index, 0);
+              return `
+                <div class="eq-band-column">
+                  <div class="eq-band-level" data-eq-value="${index}">${this._dinhDangEqLevel(value)}</div>
+                  <div class="eq-band-slider-wrap">
+                    <input
+                      id="eq-slider-${index}"
+                      class="eq-vertical-slider"
+                      data-eq-band="${index}"
+                      type="range"
+                      min="-1500"
+                      max="1500"
+                      step="100"
+                      value="${value}"
+                      orient="vertical"
+                    />
                   </div>
-                `;
-              }).join("")}
-            </div>
-
-            <div class="actions-inline eq-presets">
+                  <div class="eq-band-name ${index === this._eqBand ? "is-active" : ""}" data-eq-name="${index}">
+                    ${this._maHoaHtml(this._layNhanEqBand(index))}
+                  </div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+          <div class="actions-inline eq-presets mt6">
             <button class="mini-btn eq-preset" data-preset="flat">Phẳng</button>
             <button class="mini-btn eq-preset" data-preset="bass">Bass Boost</button>
             <button class="mini-btn eq-preset" data-preset="vocal">Giọng hát</button>
             <button class="mini-btn eq-preset" data-preset="rock">Nhạc rock</button>
             <button class="mini-btn eq-preset" data-preset="jazz">Nhạc jazz</button>
-            </div>
           </div>
         </div>
 
-        <div class="tile">
-          <div class="label-line">
-            <strong>Tăng cường bass</strong>
-            <label class="switch">
-              <input id="bass-enabled" type="checkbox" ${this._bassEnabled ? "checked" : ""} />
-              <span class="slider"></span>
-            </label>
+        <!-- Bass & Loudness -->
+        <div class="toggle-item">
+          <div class="toggle-left">
+            <div class="tog-name">🎵 Tăng cường bass</div>
           </div>
-          <div class="label-line"><span>Strength</span><strong>${Math.round(this._bassStrength / 10)}%</strong></div>
-          <input id="bass-strength" type="range" min="0" max="1000" step="10" value="${this._bassStrength}" />
+          <label class="switch">
+            <input id="bass-enabled" type="checkbox" ${this._bassEnabled ? "checked" : ""} />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="slider-row mb6">
+          <div class="slider-row-top">
+            <span class="s-name">Strength</span>
+            <span class="s-val">${Math.round(this._bassStrength / 10)}%</span>
+          </div>
+          <input id="bass-strength" type="range" min="0" max="1000" step="10" value="${this._bassStrength}" style="width:100%" />
+          <div class="slider-hints"><span>0%</span><span>50%</span><span>100%</span></div>
         </div>
 
-        <div class="tile">
-          <div class="label-line">
-            <strong>Độ lớn âm thanh (Loudness)</strong>
-            <label class="switch">
-              <input id="loudness-enabled" type="checkbox" ${this._loudnessEnabled ? "checked" : ""} />
-              <span class="slider"></span>
-            </label>
+        <div class="toggle-item">
+          <div class="toggle-left">
+            <div class="tog-name">🔊 Độ lớn âm thanh (Loudness)</div>
           </div>
-          <div class="label-line"><span>Gain</span><strong>${(this._loudnessGain / 100).toFixed(1)} dB</strong></div>
-          <input id="loudness-gain" type="range" min="-3000" max="3000" step="1" value="${this._loudnessGain}" />
+          <label class="switch">
+            <input id="loudness-enabled" type="checkbox" ${this._loudnessEnabled ? "checked" : ""} />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="slider-row mb6">
+          <div class="slider-row-top">
+            <span class="s-name">Gain</span>
+            <span class="s-val">${(this._loudnessGain / 100).toFixed(1)} dB</span>
+          </div>
+          <input id="loudness-gain" type="range" min="-3000" max="3000" step="1" value="${this._loudnessGain}" style="width:100%" />
+          <div class="slider-hints"><span>-30 dB</span><span>0 dB</span><span>+30 dB</span></div>
         </div>
 
-        <div class="tile">
-          <h4 class="sub-section-title"><ha-icon icon="mdi:lightbulb"></ha-icon> Điều khiển đèn</h4>
-          <div class="subtabs">
-            <button class="subtab ${this._lightingTab === "main" ? "active" : ""}" data-lighting-tab="main">Đèn Chính (RGB)</button>
-            <button class="subtab ${this._lightingTab === "edge" ? "active" : ""}" data-lighting-tab="edge">Đèn viền</button>
+        <!-- Lighting -->
+        <div class="sys-info-item mb6">
+          <div class="sys-label">💡 Điều khiển đèn</div>
+          <div class="sub-tabs">
+            <button class="sub-tab ${this._lightingTab === "main" ? "active" : ""}" data-lighting-tab="main">Đèn Chính (RGB)</button>
+            <button class="sub-tab ${this._lightingTab === "edge" ? "active" : ""}" data-lighting-tab="edge">Đèn viền</button>
           </div>
 
           ${this._lightingTab === "main" ? `
-            <div class="tile in-tile">
-              <div class="label-line">
-                <strong>Trạng thái đèn chính</strong>
-                <label class="switch">
-                  <input id="main-light-enabled" type="checkbox" ${this._mainLightEnabled ? "checked" : ""} />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="label-line"><span>Độ sáng</span><strong>${this._mainLightBrightness}</strong></div>
-              <input id="main-light-brightness" type="range" min="1" max="200" step="1" value="${this._mainLightBrightness}" />
-              <div class="label-line"><span>Tốc độ</span><strong>${this._mainLightSpeed}</strong></div>
-              <input id="main-light-speed" type="range" min="1" max="100" step="1" value="${this._mainLightSpeed}" />
-              <div class="actions-inline modes">
-                ${lightModes
-                  .map(
-                    ([mode, label]) => `
-                      <button class="mini-btn light-mode ${this._mainLightMode === mode ? "active" : ""}" data-mode="${mode}">${label}</button>
-                    `
-                  )
-                  .join("")}
-              </div>
+            <div class="toggle-item" style="margin-top:6px">
+              <div class="toggle-left"><div class="tog-name">Trạng thái đèn chính</div></div>
+              <label class="switch">
+                <input id="main-light-enabled" type="checkbox" ${this._mainLightEnabled ? "checked" : ""} />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="slider-row mt6">
+              <div class="slider-row-top"><span class="s-name">⚙ Độ sáng</span><span class="s-val">${this._mainLightBrightness}</span></div>
+              <input id="main-light-brightness" type="range" min="1" max="200" step="1" value="${this._mainLightBrightness}" style="width:100%" />
+            </div>
+            <div class="slider-row">
+              <div class="slider-row-top"><span class="s-name">⚡ Tốc độ</span><span class="s-val">${this._mainLightSpeed}</span></div>
+              <input id="main-light-speed" type="range" min="1" max="100" step="1" value="${this._mainLightSpeed}" style="width:100%" />
+            </div>
+            <div class="preset-row mt6">
+              ${lightModes.map(([mode, label]) =>
+                `<button class="preset-btn light-mode ${this._mainLightMode === mode ? "active" : ""}" data-mode="${mode}">${label}</button>`
+              ).join("")}
             </div>
           ` : `
-            <div class="tile in-tile">
-              <div class="label-line">
-                <strong>Trạng thái đèn viền</strong>
-                <label class="switch">
-                  <input id="edge-light-enabled" type="checkbox" ${this._edgeLightEnabled ? "checked" : ""} />
-                  <span class="slider"></span>
-                </label>
-              </div>
-              <div class="label-line"><span>Cường độ</span><strong>${this._edgeLightIntensity}</strong></div>
-              <input id="edge-light-intensity" type="range" min="0" max="100" step="1" value="${this._edgeLightIntensity}" />
+            <div class="toggle-item" style="margin-top:6px">
+              <div class="toggle-left"><div class="tog-name">Trạng thái đèn viền</div></div>
+              <label class="switch">
+                <input id="edge-light-enabled" type="checkbox" ${this._edgeLightEnabled ? "checked" : ""} />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="slider-row mt6">
+              <div class="slider-row-top"><span class="s-name">💡 Cường độ viền</span><span class="s-val">${this._edgeLightIntensity}</span></div>
+              <input id="edge-light-intensity" type="range" min="0" max="100" step="1" value="${this._edgeLightIntensity}" style="width:100%" />
             </div>
           `}
         </div>
 
-        <div class="tile">
-          <h4 class="sub-section-title"><ha-icon icon="mdi:chip"></ha-icon> Thông tin hệ thống</h4>
-          <div class="sys-stat-row">
-            <div class="sys-stat-label">CPU</div>
-            <div class="sys-stat-value" id="cpu-val">${this._cpuPercent}%</div>
-            <div class="stat-bar-wrap"><div class="stat-bar cpu" style="width:${Math.min(100, this._cpuPercent)}%"></div></div>
-          </div>
-          <div class="sys-stat-row">
-            <div class="sys-stat-label">RAM</div>
-            <div class="sys-stat-value" id="ram-val">${this._ramPercent}%</div>
-            <div class="stat-bar-wrap"><div class="stat-bar ram" style="width:${Math.min(100, this._ramPercent)}%"></div></div>
-          </div>
-          <button id="sys-info-refresh" class="mini-btn" style="margin-top:6px;">Refresh</button>
+        <!-- System Info -->
+        <div class="sys-info-item">
+          <div class="sys-label">CPU</div>
+          <div class="sys-value" id="cpu-val">${this._cpuPercent}%</div>
+          <div class="stat-bar-wrap"><div class="stat-bar cpu" style="width:${Math.min(100, this._cpuPercent)}%"></div></div>
+        </div>
+        <div class="sys-info-item">
+          <div class="sys-label">RAM</div>
+          <div class="sys-value" id="ram-val">${this._ramPercent}%</div>
+          <div class="stat-bar-wrap"><div class="stat-bar ram" style="width:${Math.min(100, this._ramPercent)}%"></div></div>
+        </div>
+        <div class="actions-inline mb6">
+          <button id="sys-info-refresh" class="mini-btn">🔄 Refresh</button>
         </div>
 
-        <div class="tile">
-          <h4 class="sub-section-title"><ha-icon icon="mdi:network"></ha-icon> MAC Address</h4>
-          <div class="label-line">
-            <span id="mac-val">${this._maHoaHtml(this._macAddress)}</span>
-            <span class="small">${this._maHoaHtml(this._macType)}</span>
+        <!-- MAC Address -->
+        <div class="sys-info-item">
+          <div class="sys-label">🔗 MAC Address</div>
+          <div class="fx jcb aic">
+            <div class="sys-value" id="mac-val">${this._maHoaHtml(this._macAddress)}</div>
+            <span style="font-size:9px;color:rgba(226,232,240,.4)" id="mac-type">${this._maHoaHtml(this._macType)}</span>
           </div>
-          <div class="actions-inline">
-            <button id="mac-get" class="mini-btn">Refresh</button>
-            <button id="mac-random" class="mini-btn">Random</button>
+          <div class="fx g4 mt6">
+            <button id="mac-get" class="mini-btn">🔄 Refresh</button>
+            <button id="mac-random" class="mini-btn">🔀 Random</button>
             <button id="mac-restore" class="mini-btn danger-mini">MAC thực</button>
           </div>
         </div>
 
-        <div class="tile">
-          <h4 class="sub-section-title"><ha-icon icon="mdi:update"></ha-icon> OTA Server</h4>
+        <!-- OTA Server -->
+        <div class="ctrl-section mt8">
+          <div class="section-label">⬆ OTA Server</div>
           <select id="ota-sel" class="form-select">
             ${this._otaServers.length === 0
               ? `<option value="">-- Chưa có --</option>`
@@ -3317,14 +3368,15 @@ class PhicommR1Card extends HTMLElement {
                   return `<option value="${this._maHoaHtml(val)}" ${val === this._otaSelected ? "selected" : ""}>${this._maHoaHtml(label)}</option>`;
                 }).join("")}
           </select>
-          <div class="actions-inline" style="margin-top:6px;">
-            <button id="ota-refresh" class="mini-btn">Refresh</button>
-            <button id="ota-save" class="mini-btn">Lưu</button>
+          <div class="fx g4 mt6">
+            <button id="ota-refresh" class="mini-btn">🔄 Refresh</button>
+            <button id="ota-save" class="mini-btn">💾 Lưu</button>
           </div>
         </div>
 
-        <div class="tile">
-          <h4 class="sub-section-title"><ha-icon icon="mdi:home-assistant"></ha-icon> Home Assistant</h4>
+        <!-- Home Assistant -->
+        <div class="ctrl-section mt8">
+          <div class="section-label">🏠 Home Assistant</div>
           <div class="form-group">
             <label class="form-label">HA URL</label>
             <input id="hass-url" type="text" class="text-input" placeholder="http://192.168.x.x:8123" value="${this._maHoaHtml(this._hassUrl)}" />
@@ -3337,19 +3389,20 @@ class PhicommR1Card extends HTMLElement {
             <label class="form-label">API Key</label>
             <input id="hass-key" type="password" class="text-input" placeholder="eyJ..." value="${this._maHoaHtml(this._hassApiKey)}" />
           </div>
-          <button id="hass-save" class="mini-btn" style="margin-top:6px;">Lưu HASS</button>
+          <button id="hass-save" class="mini-btn" style="margin-top:6px;">💾 Lưu HASS</button>
         </div>
 
-        <div class="tile">
-          <h4 class="sub-section-title"><ha-icon icon="mdi:wifi"></ha-icon> WiFi</h4>
+        <!-- WiFi -->
+        <div class="ctrl-section mt8">
+          <div class="section-label">📶 WiFi</div>
           <div id="wifi-status" class="small">${this._maHoaHtml(this._wifiStatus)}</div>
-          <div class="actions-inline" style="margin-top:6px;">
-            <button id="wifi-scan" class="mini-btn">${this._wifiScanning ? "Đang quét..." : "Quét WiFi"}</button>
-            <button id="wifi-saved" class="mini-btn">Đã lưu</button>
+          <div class="fx g4 mt6">
+            <button id="wifi-scan" class="mini-btn">${this._wifiScanning ? "Đang quét..." : "📡 Quét WiFi"}</button>
+            <button id="wifi-saved" class="mini-btn">🔄 Đã lưu</button>
           </div>
           ${this._wifiScanResults.length > 0 ? `
-            <div class="wifi-list">
-              <div class="small" style="margin:6px 0 4px;"><strong>Mạng tìm thấy:</strong></div>
+            <div class="wifi-list mt6">
+              <div class="small" style="margin:0 0 4px;"><strong>Mạng tìm thấy:</strong></div>
               ${this._wifiScanResults.map(w => {
                 const ssid = w.ssid || w.SSID || w.name || "Unknown";
                 const signal = w.signal || w.rssi || w.level || "";
@@ -3364,8 +3417,8 @@ class PhicommR1Card extends HTMLElement {
             </div>
           ` : ""}
           ${this._wifiSavedNetworks.length > 0 ? `
-            <div class="wifi-list">
-              <div class="small" style="margin:6px 0 4px;"><strong>Mạng đã lưu:</strong></div>
+            <div class="wifi-list mt6">
+              <div class="small" style="margin:0 0 4px;"><strong>Mạng đã lưu:</strong></div>
               ${this._wifiSavedNetworks.map(w => {
                 const ssid = w.ssid || w.SSID || w.name || "Unknown";
                 return `
@@ -3389,9 +3442,10 @@ class PhicommR1Card extends HTMLElement {
           ` : ""}
         </div>
 
-        <div class="tile">
+        <div class="tile mt8">
           <button id="system-reboot" class="danger-btn"><ha-icon icon="mdi:restart"></ha-icon> Reboot Speaker</button>
         </div>
+
       </section>
     `;
   }
@@ -5831,6 +5885,51 @@ class PhicommR1Card extends HTMLElement {
         .room-vol-label { font-size: 10px; color: var(--muted); min-width: 16px; text-align: right; }
         .sync-slider { flex: 1; height: 3px; -webkit-appearance: none; appearance: none; background: rgba(148,163,184,.15); border-radius: 999px; outline: none; }
         .sync-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); cursor: pointer; }
+
+        /* ── Aibox-style control panel ── */
+        .ctrl-section { margin-bottom: 12px; }
+        .section-label { font-size: 10px; color: rgba(226,232,240,.45); font-weight: 700; letter-spacing: 1px; margin-bottom: 8px; text-transform: uppercase; }
+        .toggle-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(148,163,184,.1); background: rgba(2,6,23,.3); margin-bottom: 6px; }
+        .toggle-left { flex: 1; min-width: 0; }
+        .toggle-left .tog-name { font-size: 12px; font-weight: 800; color: #e2e8f0; }
+        .toggle-left .tog-desc { font-size: 10px; color: rgba(226,232,240,.5); margin-top: 2px; line-height: 1.4; }
+        .slider-row { padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(148,163,184,.1); background: rgba(2,6,23,.3); margin-bottom: 6px; }
+        .slider-row-top { display: flex; justify-content: space-between; margin-bottom: 6px; }
+        .slider-row-top .s-name { font-size: 12px; font-weight: 800; color: #e2e8f0; }
+        .slider-row-top .s-val { font-size: 11px; color: #a78bfa; font-weight: 700; }
+        .slider-hints { display: flex; justify-content: space-between; font-size: 9px; color: rgba(226,232,240,.35); margin-top: 4px; }
+        .collapsible-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(148,163,184,.1); background: rgba(2,6,23,.4); cursor: pointer; margin-bottom: 6px; transition: all .15s; user-select: none; }
+        .collapsible-header:hover { background: rgba(109,40,217,.15); border-color: rgba(139,92,246,.2); }
+        .collapsible-title { font-size: 11px; font-weight: 800; color: #e2e8f0; display: flex; align-items: center; gap: 6px; }
+        .collapsible-arrow { font-size: 10px; color: rgba(226,232,240,.5); transition: transform .2s; display: inline-block; }
+        .collapsible-arrow.open { transform: rotate(180deg); }
+        .collapsible-body.closed { display: none; }
+        .sub-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+        .sub-tab { padding: 5px 10px; border-radius: 8px; cursor: pointer; font-size: 10px; font-weight: 700; border: 1px solid rgba(148,163,184,.12); background: transparent; color: rgba(226,232,240,.5); transition: all .15s; }
+        .sub-tab.active { background: rgba(109,40,217,.3); border-color: rgba(139,92,246,.3); color: #c4b5fd; }
+        .preset-row { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+        .preset-btn { padding: 4px 10px; border-radius: 8px; cursor: pointer; font-size: 10px; font-weight: 700; border: 1px solid rgba(148,163,184,.12); background: rgba(2,6,23,.3); color: rgba(226,232,240,.5); transition: all .15s; }
+        .preset-btn:hover { background: rgba(109,40,217,.2); border-color: rgba(139,92,246,.2); color: #c4b5fd; }
+        .eq-container { display: flex; justify-content: space-evenly; align-items: flex-end; padding: 8px 0; width: 100%; }
+        .eq-band { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; }
+        .eq-band-val { font-size: 10px; font-weight: 700; color: #a78bfa; text-align: center; min-height: 16px; line-height: 16px; }
+        .eq-band input[type=range] { writing-mode: vertical-lr; direction: rtl; -webkit-appearance: slider-vertical; width: 22px; height: 95px; flex: none; padding: 0; }
+        .eq-band label { font-size: 9px; color: rgba(226,232,240,.4); }
+
+        /* ── Aibox-style system panel ── */
+        .sys-info-item { padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(148,163,184,.1); background: rgba(2,6,23,.3); margin-bottom: 8px; }
+        .sys-label { font-size: 10px; color: rgba(226,232,240,.45); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; font-weight: 700; }
+        .sys-value { font-size: 12px; color: #e2e8f0; font-weight: 700; word-break: break-all; }
+        .fx { display: flex; }
+        .aic { align-items: center; }
+        .jcb { justify-content: space-between; }
+        .g4 { gap: 4px; }
+        .g6 { gap: 6px; }
+        .g8 { gap: 8px; }
+        .mt6 { margin-top: 6px; }
+        .mt8 { margin-top: 8px; }
+        .mb6 { margin-bottom: 6px; }
+        .f1 { flex: 1; min-width: 0; }
       </style>
 
       <ha-card>
@@ -7089,6 +7188,32 @@ class PhicommR1Card extends HTMLElement {
       el.addEventListener("click", () => {
         this._lightingTab = el.dataset.lightingTab || "main";
         this._veGiaoDien();
+      });
+    });
+
+    // Audio Engine collapsible toggle
+    const audioCollHeader = root.getElementById("audioCollHeader");
+    if (audioCollHeader) {
+      audioCollHeader.addEventListener("click", () => {
+        this._audioOpen = !(this._audioOpen !== false);
+        const body = root.getElementById("audioCollBody");
+        const arrow = root.getElementById("audioArrow");
+        if (body) body.classList.toggle("closed", !this._audioOpen);
+        if (arrow) arrow.classList.toggle("open", this._audioOpen);
+      });
+    }
+
+    // Audio sub-tabs (EQ / Surround) in control panel
+    root.querySelectorAll("[data-audio-subtab]").forEach((el) => {
+      el.addEventListener("click", () => {
+        this._audioSubTab = el.dataset.audioSubtab || "eq";
+        const eqPane = root.getElementById("audioEqPane");
+        const surPane = root.getElementById("audioSurPane");
+        if (eqPane) eqPane.classList.toggle("hidden", this._audioSubTab !== "eq");
+        if (surPane) surPane.classList.toggle("hidden", this._audioSubTab !== "sur");
+        root.querySelectorAll("[data-audio-subtab]").forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.audioSubtab === this._audioSubTab);
+        });
       });
     });
 
