@@ -3436,18 +3436,19 @@ class PhicommR1Card extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>
         :host {
-          --bg-card: #071430;
-          --bg-soft: #0d2048;
-          --bg-tile: #14274c;
-          --line: #29418f;
-          --text: #f2f5ff;
-          --muted: #a7b5d4;
-          --accent: #7a63ff;
-          --accent-2: #4f8dff;
+          --bg-card: #0a0f1e;
+          --bg-soft: #060912;
+          --bg-tile: rgba(2,6,23,.3);
+          --line: rgba(139,92,246,.3);
+          --text: #e2e8f0;
+          --muted: rgba(226,232,240,.6);
+          --accent: #7c3aed;
+          --accent-2: #a78bfa;
           --danger: #ef4444;
           display: block;
           width: 100%;
           max-width: none;
+          font-family: 'Segoe UI', system-ui, sans-serif;
         }
 
         * {
@@ -3462,9 +3463,8 @@ class PhicommR1Card extends HTMLElement {
           overflow: visible;
           border: 0;
           background:
-            radial-gradient(1400px 400px at 0% -20%, rgba(84, 81, 255, 0.18), transparent 52%),
-            radial-gradient(1000px 380px at 100% -10%, rgba(66, 167, 255, 0.16), transparent 58%),
-            linear-gradient(180deg, #040b1d 0%, var(--bg-card) 100%);
+            radial-gradient(ellipse 120% 60% at 50% 0%, rgba(109,40,217,.28), transparent 65%),
+            linear-gradient(180deg, #0a0f1e, #060912);
           color: var(--text);
           box-shadow: none;
           padding: 4px 0 0;
@@ -3502,38 +3502,38 @@ class PhicommR1Card extends HTMLElement {
         }
 
         .top-tabs {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
+          display: flex;
           gap: 6px;
-          padding: 6px 8px;
-          border: 1px solid rgba(101, 125, 255, 0.35);
-          border-radius: 12px;
-          background: rgba(10, 22, 48, 0.86);
-          margin: 0 0 10px;
+          padding: 5px;
+          border: 1px solid rgba(148,163,184,.1);
+          border-radius: 14px;
+          background: rgba(2,6,23,.5);
+          margin: 0 0 12px;
           flex: 0 0 auto;
           position: relative;
           z-index: 1;
         }
 
         .tab-btn {
-          border: 0;
-          background: rgba(255, 255, 255, 0.03);
-          color: var(--muted);
+          flex: 1;
+          border: none;
+          background: transparent;
+          color: rgba(226,232,240,.6);
           border-radius: 10px;
-          padding: 10px 8px;
-          font-size: 13px;
-          font-weight: 700;
+          padding: 8px 6px;
+          font-size: 11px;
+          font-weight: 600;
           display: flex;
           align-items: center;
           justify-content: center;
-          gap: 6px;
+          gap: 5px;
           cursor: pointer;
           transition: all 0.2s ease;
           min-width: 0;
         }
 
         .tab-btn ha-icon {
-          --mdc-icon-size: 20px;
+          --mdc-icon-size: 18px;
         }
 
         .tab-btn span {
@@ -3547,15 +3547,17 @@ class PhicommR1Card extends HTMLElement {
 
         .tab-btn.active {
           color: #fff;
-          background: linear-gradient(120deg, #6466f1, #8b5cf6);
-          box-shadow: 0 6px 14px rgba(122, 99, 255, 0.32);
+          background: rgba(109,40,217,.5);
+          border: 1px solid rgba(139,92,246,.3);
+          font-weight: 800;
+          box-shadow: 0 2px 12px rgba(109,40,217,.25);
         }
 
         .panel {
-          border: 1px solid rgba(71, 105, 235, 0.45);
+          border: 1px solid rgba(148,163,184,.1);
           border-radius: 16px;
           padding: 12px 10px;
-          background: linear-gradient(180deg, rgba(9, 25, 58, 0.7), rgba(6, 18, 43, 0.85));
+          background: rgba(2,6,23,.25);
         }
 
         .panel-media {
@@ -3836,42 +3838,43 @@ class PhicommR1Card extends HTMLElement {
         }
 
         .subtabs {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-          gap: 8px;
+          display: flex;
+          gap: 4px;
           padding: 10px 10px 8px;
         }
 
         .subtab {
-          border: 1px solid rgba(70, 106, 233, 0.4);
-          border-radius: 10px;
-          padding: 10px 8px;
-          background: rgba(255, 255, 255, 0.03);
-          color: var(--muted);
+          flex: 1;
+          border: 1px solid rgba(148,163,184,.12);
+          border-radius: 8px;
+          padding: 5px 10px;
+          background: transparent;
+          color: rgba(226,232,240,.5);
+          font-size: 10px;
           font-weight: 700;
           cursor: pointer;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
+          transition: all .15s;
         }
 
         .panel-media .subtabs {
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 6px;
+          gap: 4px;
           padding: 10px 10px 6px;
         }
 
         .panel-media .subtab {
           min-width: 0;
-          padding: 8px 6px;
-          font-size: 13px;
+          padding: 5px 4px;
+          font-size: 10px;
           letter-spacing: 0;
         }
 
         .subtab.active {
-          background: linear-gradient(120deg, rgba(100, 102, 241, 0.9), rgba(139, 92, 246, 0.88));
-          color: #fff;
-          border-color: transparent;
+          background: rgba(109,40,217,.3);
+          border-color: rgba(139,92,246,.3);
+          color: #c4b5fd;
         }
 
         .search-row {
@@ -3929,7 +3932,21 @@ class PhicommR1Card extends HTMLElement {
 
         input[type="range"] {
           width: 100%;
-          accent-color: #4f8dff;
+          -webkit-appearance: none;
+          height: 5px;
+          border-radius: 999px;
+          background: rgba(148,163,184,.2);
+          outline: none;
+          cursor: pointer;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          width: 14px;
+          height: 14px;
+          border-radius: 50%;
+          background: #7c3aed;
+          border: 2px solid rgba(167,139,250,.5);
           cursor: pointer;
         }
 
@@ -4262,29 +4279,32 @@ class PhicommR1Card extends HTMLElement {
         }
 
         .mini-btn {
-          border: 1px solid rgba(80, 122, 255, 0.45);
-          border-radius: 10px;
-          background: rgba(255, 255, 255, 0.04);
-          color: #dbe6ff;
+          border: 1px solid rgba(139,92,246,.3);
+          border-radius: 8px;
+          background: rgba(109,40,217,.25);
+          color: #c4b5fd;
           font-weight: 700;
-          padding: 9px 12px;
+          font-size: 11px;
+          padding: 6px 10px;
           cursor: pointer;
           white-space: nowrap;
+          transition: all .15s;
         }
 
         .mini-btn:hover {
-          background: rgba(255, 255, 255, 0.08);
+          background: rgba(109,40,217,.4);
+          border-color: rgba(139,92,246,.5);
         }
 
         .mini-btn.active {
-          background: linear-gradient(120deg, #3578eb, #5d5eea);
-          border-color: rgba(93, 117, 235, 0.85);
+          background: rgba(109,40,217,.6);
+          border-color: rgba(139,92,246,.7);
           color: #fff;
         }
 
         .mini-btn-primary {
-          background: linear-gradient(120deg, #3578eb, #5d5eea);
-          border-color: rgba(93, 117, 235, 0.85);
+          background: linear-gradient(135deg,#7c3aed,#5b21b6);
+          border-color: rgba(139,92,246,.4);
           color: #fff;
           display: inline-flex;
           align-items: center;
@@ -4294,11 +4314,11 @@ class PhicommR1Card extends HTMLElement {
         .mini-btn-accent {
           min-width: 28px;
           min-height: 28px;
-          border-radius: 9px;
+          border-radius: 8px;
           padding: 0 6px;
-          background: #2f6dff;
-          border-color: rgba(60, 120, 255, 0.9);
-          color: #fff;
+          background: rgba(109,40,217,.25);
+          border-color: rgba(139,92,246,.3);
+          color: #a78bfa;
           display: inline-flex;
           align-items: center;
           gap: 6px;
@@ -4308,10 +4328,10 @@ class PhicommR1Card extends HTMLElement {
         .mini-btn-danger {
           min-width: 64px;
           min-height: 28px;
-          border-radius: 9px;
+          border-radius: 8px;
           padding: 0 8px;
-          background: #ea2d32;
-          border-color: rgba(248, 88, 92, 0.9);
+          background: linear-gradient(135deg,#7c3aed,#5b21b6);
+          border-color: rgba(139,92,246,.4);
           color: #fff;
           display: inline-flex;
           align-items: center;
@@ -4356,12 +4376,12 @@ class PhicommR1Card extends HTMLElement {
           width: 44px;
           height: 44px;
           border-radius: 14px;
-          border: 1px solid rgba(97, 132, 255, 0.34);
-          background: linear-gradient(180deg, rgba(40, 76, 170, 0.34), rgba(16, 31, 69, 0.22));
+          border: 1px solid rgba(139,92,246,.35);
+          background: linear-gradient(135deg, rgba(109,40,217,.4), rgba(67,20,120,.4));
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          color: #8fb5ff;
+          color: #c4b5fd;
           box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
           flex: none;
         }
@@ -4518,10 +4538,10 @@ class PhicommR1Card extends HTMLElement {
         }
 
         .tile {
-          border: 1px solid rgba(70, 106, 233, 0.4);
-          border-radius: 14px;
-          background: rgba(255, 255, 255, 0.03);
-          padding: 10px;
+          border: 1px solid rgba(148,163,184,.1);
+          border-radius: 12px;
+          background: rgba(2,6,23,.3);
+          padding: 12px 14px;
           margin-bottom: 8px;
         }
 
@@ -4881,9 +4901,10 @@ class PhicommR1Card extends HTMLElement {
 
         .switch {
           position: relative;
-          width: 50px;
-          height: 30px;
           display: inline-block;
+          width: 42px;
+          height: 24px;
+          flex-shrink: 0;
         }
 
         .switch input {
@@ -4894,31 +4915,34 @@ class PhicommR1Card extends HTMLElement {
 
         .slider {
           position: absolute;
-          inset: 0;
-          background: #3d5075;
-          border-radius: 999px;
-          transition: 0.2s;
           cursor: pointer;
+          inset: 0;
+          background: rgba(148,163,184,.12);
+          border: 1px solid rgba(148,163,184,.2);
+          border-radius: 999px;
+          transition: all .2s;
         }
 
         .slider::before {
           content: "";
           position: absolute;
-          width: 24px;
-          height: 24px;
+          height: 16px;
+          width: 16px;
           left: 3px;
-          top: 3px;
+          bottom: 3px;
+          background: rgba(226,232,240,.7);
           border-radius: 50%;
-          background: #fff;
-          transition: 0.2s;
+          transition: all .18s;
         }
 
         .switch input:checked + .slider {
-          background: linear-gradient(120deg, #4f8dff, #7a63ff);
+          background: rgba(109,40,217,.5);
+          border-color: rgba(139,92,246,.4);
         }
 
         .switch input:checked + .slider::before {
-          transform: translateX(20px);
+          transform: translateX(18px);
+          background: #c4b5fd;
         }
 
         .danger-btn {
