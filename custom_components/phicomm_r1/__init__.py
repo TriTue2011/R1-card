@@ -28,13 +28,21 @@ from .const import (
     PROTOCOL_WS_NATIVE,
 )
 from .coordinator import PhicommR1Coordinator
+from .websocket_proxy import async_register_views
 
 PhicommR1ConfigEntry = ConfigEntry[dict[str, Any]]
 _LOGGER = logging.getLogger(__name__)
 
+_VIEWS_REGISTERED = "views_registered"
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: PhicommR1ConfigEntry) -> bool:
     """Set up Phicomm R1 from a config entry."""
+    hass.data.setdefault(DOMAIN, {})
+    if not hass.data[DOMAIN].get(_VIEWS_REGISTERED):
+        async_register_views(hass)
+        hass.data[DOMAIN][_VIEWS_REGISTERED] = True
+
     merged = {**entry.data, **entry.options}
     session = async_get_clientsession(hass)
     host = merged.get(CONF_HOST, entry.data[CONF_HOST])
@@ -86,7 +94,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: PhicommR1ConfigEntry) ->
         )
         await coordinator.async_refresh()
 
-    hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
         "client": client,
         "coordinator": coordinator,
@@ -102,7 +109,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: PhicommR1ConfigEntry) -
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
-        if not hass.data[DOMAIN]:
+        # Keep _VIEWS_REGISTERED flag; only check entry IDs
+        remaining = {k for k in hass.data.get(DOMAIN, {}) if k != _VIEWS_REGISTERED}
+        if not remaining:
             hass.data.pop(DOMAIN, None)
     return unload_ok
 
