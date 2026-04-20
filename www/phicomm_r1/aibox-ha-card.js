@@ -3232,40 +3232,18 @@ select.form-inp{cursor:pointer}
   }
 }
 
-customElements.define("aibox-ha-card", AiBoxCard);
+if (!customElements.get("aibox-ha-card")) {
+  customElements.define("aibox-ha-card", AiBoxCard);
+}
 window.customCards = window.customCards || [];
-window.customCards.push({ type: "aibox-ha-card", name: "AI BOX HA Card", description: "AI BOX full-feature card via custom HTTPS endpoint or LAN/tunnel", preview: false });
+if (!window.customCards.find(c => c.type === "aibox-ha-card")) {
+  window.customCards.push({ type: "aibox-ha-card", name: "AI BOX HA Card", description: "AI BOX full-feature card via custom HTTPS endpoint or LAN/tunnel", preview: false });
+}
 
-// ── Cache-buster ─────────────────────────────────────────────────────────────
 (function() {
-  const BUILD_TS = "20260415-ha-custom-v1";
-  const SK = "aibox_ha_card_build";
-
-  try {
-    const stored = sessionStorage.getItem(SK);
-    if (stored !== BUILD_TS) {
-      sessionStorage.setItem(SK, BUILD_TS);
-
-      if (stored !== null && 'caches' in window) {
-        caches.keys().then(keys => {
-          return Promise.all(keys.map(k => caches.delete(k)));
-        }).then(() => {
-          console.warn("[AI BOX HA Card] Cache cleared — reloading for new build:", BUILD_TS);
-          window.location.reload();
-        }).catch(() => {
-          window.location.reload();
-        });
-      } else if (stored !== null) {
-        const url = new URL(window.location.href);
-        url.searchParams.set("_aibox_v", BUILD_TS);
-        window.location.replace(url.toString());
-      }
-    }
-  } catch(e) {
-    console.warn("[AI BOX HA Card] sessionStorage unavailable, cache busting skipped:", e);
-  }
-
-  console.log(`%c AI BOX HA Card [${BUILD_TS}] — base: aibox-webui-card + HTTPS custom_ws_url/custom_speaker_ws_url`, "color:#a78bfa;font-weight:bold;font-size:11px");
+  const BUILD_TS = "20260420-ha-custom-v2";
+  try { sessionStorage.setItem("aibox_ha_card_build", BUILD_TS); } catch(_) {}
+  console.log(`%c AI BOX HA Card [${BUILD_TS}] — custom_ws_url/custom_speaker_ws_url`, "color:#a78bfa;font-weight:bold;font-size:11px");
 })();
 const PhicommBaseCard = customElements.get("phicomm-r1-card");
 
