@@ -1753,7 +1753,7 @@ class AiBoxCard extends HTMLElement {
 /* Modern Web UI Theme for Aibox HA Card */
 *{box-sizing:border-box;margin:0;padding:0}
 ha-card{border-radius:20px;overflow:hidden;font-family:'Inter',system-ui,sans-serif;background:transparent;box-shadow:none;border:none}
-.wrap{background:linear-gradient(135deg,#0b0f19 0%,#1e1b4b 100%);padding:16px;position:relative;-webkit-tap-highlight-color:transparent;color:#e2e8f0;min-height:400px}
+.wrap{background:linear-gradient(135deg,#0b0f19 0%,#1e1b4b 100%);padding:16px;position:relative;-webkit-tap-highlight-color:transparent;color:#e2e8f0}
 .header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
 .brand{display:flex;align-items:center;gap:10px}
 .badge-icon{width:36px;height:36px;border-radius:12px;background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);display:grid;place-items:center;font-size:18px;color:#fff;box-shadow:0 4px 12px rgba(99,102,241,.4)}
