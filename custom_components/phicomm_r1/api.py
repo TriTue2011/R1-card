@@ -932,12 +932,12 @@ class PhicommR1ApiClient:
             return
         if action in {"pause", "stop"}:
             await self._ws_chi_gui(
-                {"type": "send_message", "what": 4, "arg1": 2, "arg2": -1, "obj": True}
+                {"type": "send_message", "what": 4, "arg1": 3, "arg2": -1, "obj": True}
             )
             return
         if action == "play":
             await self._ws_chi_gui(
-                {"type": "send_message", "what": 4, "arg1": 3, "arg2": -1, "obj": True}
+                {"type": "send_message", "what": 4, "arg1": 2, "arg2": -1, "obj": True}
             )
             return
         raise PhicommR1ApiResponseError(f"Unsupported media action: {action}")
@@ -945,6 +945,7 @@ class PhicommR1ApiClient:
     async def _ws_dat_am_luong(self, target: int) -> None:
         """Set volume via native WS API."""
         await self._ws_chi_gui({"type": "set_vol", "vol": int(target)})
+        await self._ws_chi_gui({"type": "send_message", "what": 4, "arg1": 5, "arg2": int(target), "obj": True})
 
     async def _ws_cho_dieu_kien(
         self,
