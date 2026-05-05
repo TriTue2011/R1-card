@@ -1745,6 +1745,8 @@ class PhicommR1ApiClient:
             "stop": ["stop", "stop_song"],
             "next": ["next", "next_song"],
             "previous": ["previous", "prev_song"],
+            "volume_up": ["volume_up"],
+            "volume_down": ["volume_down"],
         }
         aliases = action_aliases.get(action)
         if not aliases:

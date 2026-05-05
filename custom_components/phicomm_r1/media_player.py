@@ -1926,11 +1926,21 @@ class PhicommR1MediaPlayer(CoordinatorEntity[PhicommR1Coordinator], MediaPlayerE
 
     async def async_volume_up(self) -> None:
         """Volume up."""
+        if self._is_ws_native:
+            with suppress(PhicommR1ApiError):
+                await self._client.async_aibox_media_action("volume_up")
+                await self.coordinator.async_request_refresh()
+                return
         await self._client.async_send_keycode(KEYCODE_VOLUME_UP)
         await self.coordinator.async_request_refresh()
 
     async def async_volume_down(self) -> None:
         """Volume down."""
+        if self._is_ws_native:
+            with suppress(PhicommR1ApiError):
+                await self._client.async_aibox_media_action("volume_down")
+                await self.coordinator.async_request_refresh()
+                return
         await self._client.async_send_keycode(KEYCODE_VOLUME_DOWN)
         await self.coordinator.async_request_refresh()
 
