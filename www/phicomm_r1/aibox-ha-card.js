@@ -1,11 +1,17 @@
+;(function() { // IIFE: scope all constants to avoid conflicts with other cards
+// ═══════════════════════════════════════════════════════════════════
+// AI BOX HA Card — Cache-busting: force HA to serve latest version
+// If this file was updated but HA still serves a cached copy, the
+// version below will differ from what the card expects at runtime.
+// ═══════════════════════════════════════════════════════════════════
+const CARD_VERSION = "v8.1.0";
+const CARD_BUILD = Date.now();
 
 const DEFAULTS = {
   host: "", ws_port: 8082, speaker_port: 8080, http_port: 8081,
-  // HTTPS/domain custom proxy (ưu tiên hơn tunnel khi có cấu hình)
-  custom_ws_url: "",
-  custom_speaker_ws_url: "",
   tunnel_host: "", tunnel_port: 443, tunnel_path: "/",
   speaker_tunnel_host: "", speaker_tunnel_port: 443, speaker_tunnel_path: "/",
+  custom_ws_url: "", custom_speaker_ws_url: "",
   mode: "auto", title: "AI BOX",
   rooms: null,
   default_tab: "media", show_background: true,
@@ -29,6 +35,21 @@ class AiBoxCard extends HTMLElement {
   static getStubConfig() { return { mode: "auto", title: "AI BOX", rooms: [] }; }
   static getConfigElement() { return null; }
 
+  static get _VIETNAM_PROVINCES() {
+    return [
+      "An Giang","Bà Rịa - Vũng Tàu","Bạc Liêu","Bắc Giang","Bắc Kạn","Bắc Ninh","Bến Tre",
+      "Bình Dương","Bình Định","Bình Phước","Bình Thuận","Cà Mau","Cao Bằng","Cần Thơ",
+      "Đà Nẵng","Đắk Lắk","Đắk Nông","Điện Biên","Đồng Nai","Đồng Tháp","Gia Lai",
+      "Hà Giang","Hà Nam","Hà Nội","Hà Tĩnh","Hải Dương","Hải Phòng","Hậu Giang",
+      "Hòa Bình","Huế","Hưng Yên","Khánh Hòa","Kiên Giang","Kon Tum","Lai Châu",
+      "Lạng Sơn","Lào Cai","Lâm Đồng","Long An","Nam Định","Nghệ An","Ninh Bình",
+      "Ninh Thuận","Phú Thọ","Phú Yên","Quảng Bình","Quảng Nam","Quảng Ngãi",
+      "Quảng Ninh","Quảng Trị","Sóc Trăng","Sơn La","Tây Ninh","Thái Bình",
+      "Thái Nguyên","Thanh Hóa","Tiền Giang","TP Hồ Chí Minh","Trà Vinh","Tuyên Quang",
+      "Vĩnh Long","Vĩnh Phúc","Yên Bái"
+    ];
+  }
+
   _lsKey(k) { return `aibox_${(this._config?.title||'card').replace(/\W+/g,'_')}_${k}`; }
   _lsGet(k) { try { const v = localStorage.getItem(this._lsKey(k)); return v !== null ? JSON.parse(v) : null; } catch { return null; } }
   _lsSet(k, v) { try { localStorage.setItem(this._lsKey(k), JSON.stringify(v)); } catch {} }
@@ -44,11 +65,9 @@ class AiBoxCard extends HTMLElement {
           tunnel_host: (r.tunnel_host || "").trim(),
           tunnel_port: Number(r.tunnel_port || 443),
           tunnel_path: (r.tunnel_path || "/").trim() || "/",
-          custom_ws_url: (r.custom_ws_url || "").trim(),
           speaker_tunnel_host: (r.speaker_tunnel_host || "").trim(),
           speaker_tunnel_port: Number(r.speaker_tunnel_port || 443),
           speaker_tunnel_path: (r.speaker_tunnel_path || "/").trim() || "/",
-          custom_speaker_ws_url: (r.custom_speaker_ws_url || "").trim(),
         }))
       : null;
 
@@ -141,7 +160,7 @@ class AiBoxCard extends HTMLElement {
     this._activeSearchTab = 'songs';
     this._activeAudioTab = 'eq';
     this._activeLightTab = 'main';
-    this._audioOpen = false; this._lightOpen = false;
+    this._audioOpen = false; this._lightOpen = false; this._stereoOpen = false;
     this._volDragging = false; this._ctrlGuard = 0; this._audioGuard = 0;
     this._lastCpuIdle = null; this._lastCpuTotal = null;
     this._offline = false; this._retryIn = 0; this._failCount = 0; this._dropCount = 0;
@@ -155,6 +174,8 @@ class AiBoxCard extends HTMLElement {
       customAiEnabled: null, voiceId: null, live2dModel: null,
       otaUrl: null, otaOptions: null,
       hassConfigured: null, hassUrl: "", hassAgentId: "", hassApiKeyMasked: false,
+      hassPipelines: [], hassPipeline: "",
+      weatherProvince: "", weatherLat: 0, weatherLon: 0, weatherProvinceList: [], weatherProvinceCurrent: "",
       wifiStatus: null, wifiNetworks: [], wifiSaved: [],
       macAddress: "", macIsCustom: false,
       media: { source: null, isPlaying: false, title: "Không có nhạc", artist: "---",
@@ -166,7 +187,7 @@ class AiBoxCard extends HTMLElement {
       bass: { enabled: false, strength: 0 }, loudness: { enabled: false, gain: 0 },
       bassVol: 231, highVol: 231, surroundW: 40,
       premium: -1, premQrB64: "",
-      weather: { name: "", lat: 0, lon: 0 }, weatherProvinces: [],
+      stereoEnabled: null, stereoChannel: 'stereo', stereoReceiverEnabled: null, stereoSlaveIp: "", stereoSyncDelayMs: 0,
     };
 
     if (this._inited) { this._render(); this._bind(); this._connectWsAuto(); }
@@ -185,19 +206,15 @@ class AiBoxCard extends HTMLElement {
       const r = this._rooms[this._currentRoomIdx || 0];
       this._host = r.host;
       this._roomTunnelHost = r.tunnel_host; this._roomTunnelPort = r.tunnel_port; this._roomTunnelPath = r.tunnel_path;
-      this._roomCustomWsUrl = r.custom_ws_url || "";
       this._roomSpkTunnelHost = r.speaker_tunnel_host; this._roomSpkTunnelPort = r.speaker_tunnel_port; this._roomSpkTunnelPath = r.speaker_tunnel_path;
-      this._roomCustomSpkWsUrl = r.custom_speaker_ws_url || "";
     } else {
       this._host = (this._config.host || "").trim() || window.location.hostname;
       this._roomTunnelHost = (this._config.tunnel_host || "").trim();
       this._roomTunnelPort = Number(this._config.tunnel_port || 443);
       this._roomTunnelPath = (this._config.tunnel_path || "/").trim() || "/";
-      this._roomCustomWsUrl = (this._config.custom_ws_url || "").trim();
       this._roomSpkTunnelHost = (this._config.speaker_tunnel_host || "").trim();
       this._roomSpkTunnelPort = Number(this._config.speaker_tunnel_port || 443);
       this._roomSpkTunnelPath = (this._config.speaker_tunnel_path || "/").trim() || "/";
-      this._roomCustomSpkWsUrl = (this._config.custom_speaker_ws_url || "").trim();
     }
   }
 
@@ -246,6 +263,8 @@ class AiBoxCard extends HTMLElement {
       customAiEnabled: null, voiceId: null, live2dModel: null,
       otaUrl: null, otaOptions: null,
       hassConfigured: null, hassUrl: "", hassAgentId: "", hassApiKeyMasked: false,
+      hassPipelines: [], hassPipeline: "",
+      weatherProvince: "", weatherProvinceList: [], weatherProvinceCurrent: "",
       wifiStatus: null, wifiNetworks: [], wifiSaved: [],
       macAddress: "", macIsCustom: false,
       media: { source: null, isPlaying: false, title: "Không có nhạc", artist: "---",
@@ -260,7 +279,6 @@ class AiBoxCard extends HTMLElement {
       bass: { enabled: false, strength: 0 }, loudness: { enabled: false, gain: 0 },
       bassVol: 231, highVol: 231, surroundW: 40,
       premium: -1, premQrB64: "",
-      weather: { name: "", lat: 0, lon: 0 }, weatherProvinces: [],
     };
     this._ctrlGuard = 0; this._audioGuard = 0; this._volDragging = false;
     this._lastZingSongId = "";
@@ -343,7 +361,6 @@ class AiBoxCard extends HTMLElement {
     const room = this._rooms[idx]; if (!room) return "";
     const mode = (this._config.mode || "auto").toLowerCase();
     const https = this._isHttps();
-    const _customUrl = () => this._resolveCustomWsUrl(room.custom_ws_url || this._config.custom_ws_url || "", room.host);
     const _tunnelUrl = () => {
       const th = room.tunnel_host; if (!th) return "";
       const tp = room.tunnel_port || 443;
@@ -353,10 +370,6 @@ class AiBoxCard extends HTMLElement {
       return url;
     };
     const _lanUrl = () => (https ? "" : `ws://${room.host}:${this._config.ws_port}`);
-    if (https) {
-      const custom = _customUrl();
-      if (custom) return custom;
-    }
     if (mode === "lan") return _lanUrl();
     if (mode === "tunnel") return _tunnelUrl();
     return https ? _tunnelUrl() : _lanUrl();
@@ -366,7 +379,6 @@ class AiBoxCard extends HTMLElement {
     const room = this._rooms[idx]; if (!room) return "";
     const mode = (this._config.mode || "auto").toLowerCase();
     const https = this._isHttps();
-    const _customUrl = () => this._resolveCustomWsUrl(room.custom_speaker_ws_url || this._config.custom_speaker_ws_url || "", room.host);
     const _tunnelUrl = () => {
       const th = room.speaker_tunnel_host; if (!th) return "";
       const tp = room.speaker_tunnel_port || 443;
@@ -376,10 +388,6 @@ class AiBoxCard extends HTMLElement {
       return url;
     };
     const _lanUrl = () => (https ? "" : `ws://${room.host}:${this._config.speaker_port || 8080}`);
-    if (https) {
-      const custom = _customUrl();
-      if (custom) return custom;
-    }
     if (mode === "lan") return _lanUrl();
     if (mode === "tunnel") return _tunnelUrl();
     return https ? _tunnelUrl() : _lanUrl();
@@ -412,9 +420,9 @@ class AiBoxCard extends HTMLElement {
           ws.onopen = () => {
             entry.connected = true;
             entry.pollTimer = setInterval(() => {
-              if (ws.readyState === 1) ws.send(JSON.stringify({ action: 'get_info' }));
+              if (ws.readyState === 1) ws.send(JSON.stringify({ action: 'get_version' }));
             }, 5000);
-            ws.send(JSON.stringify({ action: 'get_info' }));
+            ws.send(JSON.stringify({ action: 'get_version' }));
             const cmdToSend = entry._pendingCmd || this._buildPlayCmdFromCache(this._nowPlaying);
             if (cmdToSend) {
               setTimeout(() => {
@@ -423,8 +431,7 @@ class AiBoxCard extends HTMLElement {
               }, 300);
             } else {
               entry._pendingCmd = null;
-              // Không có play cmd → hỏi trạng thái hiện tại để cập nhật UI
-              ws.send(JSON.stringify({ action: 'get_playback_state' }));
+              // Playback state is pushed automatically by firmware - no need to request
             }
             // FIX: đồng bộ volume master sang room mới
             setTimeout(() => {
@@ -1011,15 +1018,45 @@ class AiBoxCard extends HTMLElement {
     }
   }
 
-  set hass(h) { this._hass = h; if (!this._inited) { this._inited = true; this._render(); this._bind(); this._connectWsAuto(); } }
+  set hass(h) {
+    this._hass = h;
+    if (!this._inited) {
+      this._inited = true;
+      // ── Cache-busting: force HA to reload frontend resources ──
+      this._bustCache();
+      this._render(); this._bind(); this._connectWsAuto();
+    }
+  }
+
+  _bustCache() {
+    // If this code runs, the browser has the latest JS file.
+    // But HA may still serve old cached resources. Force reload.
+    try {
+      const key = "aibox_ha_card_ver";
+      const prev = sessionStorage.getItem(key);
+      if (prev && prev !== CARD_VERSION) {
+        console.log("%c🔄 AI BOX HA Card: " + prev + " → " + CARD_VERSION + ", reloading resources", "color:#fbbf24;font-weight:bold");
+        sessionStorage.setItem(key, CARD_VERSION);
+        // Try to reload HA frontend resources
+        if (this._hass && this._hass.callService) {
+          this._hass.callService("frontend", "reload_themes", {}).catch(() => {});
+        }
+        // Also try to reload Lovelace resources
+        if (window.location && window.location.reload) {
+          setTimeout(() => window.location.reload(), 800);
+        }
+      } else if (!prev) {
+        sessionStorage.setItem(key, CARD_VERSION);
+      }
+    } catch(e) {}
+  }
 
   connectedCallback() {
     if (this._inited) this._connectWsAuto();
     if (!this._visHandler) {
       this._visHandler = () => {
         if (!document.hidden && this._wsConnected && this._state.media.isPlaying && !this._cardCollapsed) {
-          this._send({ action: 'get_playback_state' });
-          this._send({ action: 'playback_info' });
+          // Actions removed because they are no longer supported by firmware.
         }
       };
       document.addEventListener('visibilitychange', this._visHandler);
@@ -1042,20 +1079,13 @@ class AiBoxCard extends HTMLElement {
   getCardSize() { return 9; }
 
   _isHttps() { return window.location.protocol === "https:"; }
-  _resolveCustomWsUrl(raw, targetHost = this._host) {
-    const s = String(raw || "").trim();
-    if (!s) return "";
-    const host = targetHost || "";
-    let out = s.replaceAll("{ip}", encodeURIComponent(host)).replaceAll("{host}", encodeURIComponent(host));
-    if (out.startsWith("/")) {
-      const scheme = this._isHttps() ? "wss" : "ws";
-      out = `${scheme}://${window.location.host}${out}`;
-    }
-    return out;
+  _isDomainMode() {
+    const mode = (this._config.mode || "auto").toLowerCase();
+    if (mode === "domain") return true;
+    if (mode === "lan" || mode === "tunnel") return false;
+    return this._isHttps(); // auto: HTTPS = domain mode
   }
   _lanWsUrl() { return `ws://${this._host}:${this._config.ws_port}`; }
-  _customWsUrl() { return this._resolveCustomWsUrl(this._roomCustomWsUrl || this._config.custom_ws_url || "", this._host); }
-  _customSpkWsUrl() { return this._resolveCustomWsUrl(this._roomCustomSpkWsUrl || this._config.custom_speaker_ws_url || "", this._host); }
   _tunnelWsUrl() {
     const host = this._roomTunnelHost; if (!host) return "";
     const port = this._roomTunnelPort; const path = this._roomTunnelPath;
@@ -1064,29 +1094,38 @@ class AiBoxCard extends HTMLElement {
     if (ip) return base + (base.includes("?") ? "&" : "?") + "ip=" + encodeURIComponent(ip);
     return base;
   }
+  /** Build custom WS URL by replacing {ip} placeholder with device host. */
+  _customWsUrl(template) {
+    if (!template || !this._host) return "";
+    return template.replace(/\{ip\}/g, encodeURIComponent(this._host));
+  }
 
   _buildCandidates() {
     const mode = (this._config.mode || "auto").toLowerCase();
     const https = this._isHttps(); const list = [];
+    // Domain mode: use custom_ws_url if provided (HA proxy WS), otherwise no WS
+    if (this._isDomainMode()) {
+      const url = this._customWsUrl(this._config.custom_ws_url);
+      if (url) return [{ url, label: "PROXY WS" }];
+      return []; // No WS in domain mode without custom_ws_url (HA services bridge)
+    }
     if (mode === "lan") {
       if (https) {
-        const c = this._customWsUrl(); if (c) list.push({ url: c, label: "CUSTOM WSS" });
         const t = this._tunnelWsUrl(); if (t) list.push({ url: t, label: "TUNNEL WSS" });
-        if (!c && !t) this._toast("HTTPS: cần cấu hình custom_ws_url hoặc tunnel_host", "error");
+        else this._toast("HTTPS: cần cấu hình tunnel_host", "error");
       } else { list.push({ url: this._lanWsUrl(), label: "LAN WS" }); }
     } else if (mode === "tunnel") {
       const t = this._tunnelWsUrl(); if (t) list.push({ url: t, label: "TUNNEL WSS" });
     } else {
-      if (https) {
-        const c = this._customWsUrl(); if (c) list.push({ url: c, label: "CUSTOM WSS" });
-        const t = this._tunnelWsUrl(); if (t) list.push({ url: t, label: "TUNNEL WSS" });
-      }
+      if (https) { const t = this._tunnelWsUrl(); if (t) list.push({ url: t, label: "TUNNEL WSS" }); }
       else { list.push({ url: this._lanWsUrl(), label: "LAN WS" }); }
     }
     return list;
   }
 
   _connectWsAuto() {
+    // Domain mode: skip WS only if no custom_ws_url (HA services bridge is sufficient)
+    if (this._isDomainMode() && !this._config.custom_ws_url) return;
     if (this._switching || this._cardCollapsed) return;
     if (this._ws && (this._ws.readyState === 0 || this._ws.readyState === 1)) return;
     clearTimeout(this._reconnectTimer);
@@ -1094,7 +1133,7 @@ class AiBoxCard extends HTMLElement {
     if (!candidates.length) {
       this._wsConnected = false; this._setConnDot(false);
       this._setOffline(true, 0, 1, 1);
-      this._toast(this._isHttps() ? "HTTPS: cần cấu hình custom_ws_url hoặc tunnel_host" : "Chưa có host", "error"); return;
+      this._toast(this._isHttps() ? "HTTPS: cần cấu hình tunnel_host" : "Chưa có host", "error"); return;
     }
     this._doTry(candidates, 0, 1);
   }
@@ -1213,12 +1252,20 @@ class AiBoxCard extends HTMLElement {
   _connectSpkWs() {
     if (this._switching || this._cardCollapsed) return;
     if (this._spkWs && (this._spkWs.readyState === 0 || this._spkWs.readyState === 1)) return;
-    const https = this._isHttps(); let url;
-    if (https) {
-      url = this._customSpkWsUrl() || this._spkTunnelWsUrl();
+    // Domain mode: use custom_speaker_ws_url if provided, otherwise skip
+    if (this._isDomainMode()) {
+      const url = this._customWsUrl(this._config.custom_speaker_ws_url);
       if (!url) return;
+      this._connectSpkWithUrl(url, "SPK PROXY WS");
+      return;
     }
+    const https = this._isHttps(); let url;
+    if (https) { url = this._spkTunnelWsUrl(); if (!url) return; }
     else { url = this._spkWsUrl(); }
+    this._connectSpkWithUrl(url, https ? "SPK TUNNEL WSS" : "SPK LAN WS");
+  }
+
+  _connectSpkWithUrl(url, label) {
     const capturedHost = this._host;
     try {
       this._spkWs = new WebSocket(url);
@@ -1396,28 +1443,32 @@ class AiBoxCard extends HTMLElement {
     if (this._cardCollapsed) return;
     this._stopTabServices();
     if (tab === 'media') {
-      this._send({ action: 'get_info' }); this._startProgressTick(); this._startWaveform();
+      this._startProgressTick(); this._startWaveform();
     } else if (tab === 'control') {
-      this._send({ action: 'get_info' }); this._send({ action: 'alarm_list' }); this._send({ action: 'led_get_state' });
-      this._send({ action: 'wake_word_get_enabled' }); this._send({ action: 'wake_word_get_sensitivity' });
-      this._send({ action: 'custom_ai_get_enabled' }); this._send({ action: 'voice_id_get' }); this._send({ action: 'live2d_get_model' });
+      this._send({ action: 'alarm_list' }); this._send({ action: 'led_get_state' });
+      this._send({ action: 'custom_ai_get_enabled' }); this._send({ action: 'voice_id_get' }); this._send({ action: 'live2d_model_get' });
       this._ctrlPoll = setInterval(() => {
         if (this._cardCollapsed) return;
-        this._send({ action: 'led_get_state' }); this._send({ action: 'get_info' });
+        this._send({ action: 'led_get_state' });
       }, 5000);
     } else if (tab === 'chat') {
-      this._send({ action: 'get_info' });
       if (!this._chatLoaded) { this._send({ action: 'chat_get_history' }); }
-      this._send({ action: 'get_chat_background' }); this._send({ action: 'custom_ai_get_enabled' });
+      this._send({ action: 'custom_ai_get_enabled' });
     } else if (tab === 'system') {
-      this._send({ action: 'get_info' }); this._send({ action: 'get_device_info' }); this._send({ action: 'ota_get' });
+      this._send({ action: 'ota_get' });
       this._send({ action: 'hass_get' }); this._send({ action: 'wifi_get_status' }); this._send({ action: 'wifi_get_saved' });
-      this._send({ action: 'mac_get' }); this._send({ action: 'get_premium_status' });
+      this._send({ action: 'mac_get' });
       this._send({ action: 'weather_province_get' });
+      // Load province list from speaker if not already loaded
+      if (!this._state.weatherProvinceList || this._state.weatherProvinceList.length === 0) {
+        this._loadWeatherProvinces();
+      }
+      // Fetch Assist pipelines directly from HA API via HTTP
+      this._fetchHassPipelines();
       this._sysPoll = setInterval(() => {
         if (this._cardCollapsed) return;
-        this._send({ action: 'get_info' }); this._send({ action: 'get_device_info' });
-      }, 3000);
+        this._send({ action: 'get_premium' });
+      }, 10000);
     }
   }
 
@@ -1489,7 +1540,13 @@ class AiBoxCard extends HTMLElement {
       }
       const bars = this._waveBars, balls = this._waveBalls;
       if (!bars || bars.length !== BAR_COUNT) { const wv = this.querySelector('#waveform'); if (wv) { this._waveBars = wv.querySelectorAll('.wv-bar'); this._waveBalls = wv.querySelectorAll('.wv-ball'); } return; }
-      for (let i = 0; i < BAR_COUNT; i++) { bars[i].style.height = cur[i] + 'px'; if (balls && balls[i]) balls[i].style.bottom = peak[i] + 'px'; }
+      for (let i = 0; i < BAR_COUNT; i++) { 
+        bars[i].style.height = cur[i] + 'px'; 
+        if (balls && balls[i]) {
+          balls[i].style.bottom = peak[i] + 'px';
+          balls[i].style.display = curMode === 'classic' ? 'none' : 'block';
+        }
+      }
     };
 
     const wv = this.querySelector('#waveform');
@@ -1530,19 +1587,6 @@ class AiBoxCard extends HTMLElement {
   _fmtTime(s) { s = Math.max(0, Math.floor(Number(s || 0))); return `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`; }
   _esc(s) { return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
   _dbStr(v) { const d = v - 231; return (d >= 0 ? "+" : "") + d + " dB"; }
-
-  _applySurround(width) {
-    // Surround = EQ + loudness combo (matched from AiBox web UI F12 capture)
-    // Width 0→100 scales: band0=-8w, band1=-7w, band2=-9w, band3=+11w, band4=+14w, gain=+8w
-    const w = Math.max(0, Math.min(100, width));
-    const bands = [Math.round(-8*w), Math.round(-7*w), Math.round(-9*w), Math.round(11*w), Math.round(14*w)];
-    const gain = Math.round(8*w);
-    bands.forEach((lv, i) => this._sendSpk({ type: "set_eq_bandlevel", band: i, level: lv }));
-    this._sendSpk({ type: "set_loudness_enable", enable: true });
-    this._sendSpk({ type: "set_loudness_gain", gain: gain });
-    this._sendSpk({ type: "set_eq_enable", enable: true });
-  }
-
   _setConnDot(on) { const d = this.querySelector("#connDot"); if (d) d.classList.toggle("on", !!on); }
   _setConnText(t) { const el = this.querySelector("#connText"); if (el) el.textContent = t || "WS"; }
 
@@ -1747,24 +1791,24 @@ class AiBoxCard extends HTMLElement {
 
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-ha-card{border-radius:20px;overflow:hidden;font-family:'Segoe UI',system-ui,sans-serif}
-.wrap{background:radial-gradient(ellipse 120% 60% at 50% 0%,rgba(109,40,217,.28),transparent 65%),linear-gradient(180deg,#0a0f1e,#060912);border:1px solid rgba(109,40,217,.2);padding:14px 14px 10px;position:relative;-webkit-tap-highlight-color:transparent}
+ha-card{border-radius:20px;overflow:hidden;font-family:'Inter','Segoe UI',system-ui,sans-serif}
+.wrap{background:linear-gradient(135deg,#0a0e1a 0%,#0f1419 50%,#0a0e1a 100%);border:1px solid rgba(99,102,241,.2);padding:14px 14px 10px;position:relative;-webkit-tap-highlight-color:transparent}
 .header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
 .brand{display:flex;align-items:center;gap:9px}
-.badge-icon{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,rgba(109,40,217,.4),rgba(67,20,120,.4));border:1px solid rgba(139,92,246,.35);display:grid;place-items:center;font-size:16px}
+.badge-icon{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,rgba(99,102,241,.4),rgba(79,70,229,.4));border:1px solid rgba(99,102,241,.35);display:grid;place-items:center;font-size:16px}
 .title-text{font-weight:900;font-size:16px;color:#e2e8f0;letter-spacing:.5px}
 .conn-row{display:flex;align-items:center;gap:7px}
 .dot{width:9px;height:9px;border-radius:50%;background:rgba(239,68,68,.9);box-shadow:0 0 8px rgba(239,68,68,.4);transition:all .3s}
 .dot.on{background:rgba(34,197,94,.9);box-shadow:0 0 10px rgba(34,197,94,.5)}
-.conn-label{font-size:12px;color:rgba(226,232,240,.6)}
-.collapse-btn{background:rgba(109,40,217,.2);border:1px solid rgba(139,92,246,.25);color:#c4b5fd;cursor:pointer;border-radius:6px;padding:3px 8px;font-size:12px;font-weight:700;transition:all .15s}
-.collapse-btn:hover{background:rgba(109,40,217,.4)}
+.conn-label{font-size:10px;color:rgba(226,232,240,.6)}
+.collapse-btn{background:rgba(99,102,241,.2);border:1px solid rgba(99,102,241,.25);color:#a5b4fc;cursor:pointer;border-radius:6px;padding:2px 7px;font-size:11px;font-weight:700;transition:all .15s}
+.collapse-btn:hover{background:rgba(99,102,241,.4)}
 .room-bar{display:flex;gap:5px;overflow-x:auto;padding:0 0 8px;scrollbar-width:none;-webkit-overflow-scrolling:touch;margin-bottom:4px;align-items:flex-end}
 .room-bar::-webkit-scrollbar{display:none}
 .room-pill-group{display:flex;flex-direction:column;align-items:center;gap:3px;flex-shrink:0}
-.room-pill{display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:999px;cursor:pointer;font-size:13px;font-weight:700;white-space:nowrap;border:1px solid rgba(148,163,184,.18);background:rgba(2,6,23,.4);color:rgba(226,232,240,.6);transition:all .18s}
-.room-pill:hover{background:rgba(109,40,217,.2);border-color:rgba(139,92,246,.25);color:#c4b5fd}
-.room-pill.active{background:linear-gradient(135deg,rgba(109,40,217,.45),rgba(91,33,182,.4));border-color:rgba(139,92,246,.5);color:#fff;box-shadow:0 2px 14px rgba(109,40,217,.3)}
+.room-pill{display:flex;align-items:center;gap:5px;padding:6px 12px;border-radius:999px;cursor:pointer;font-size:11px;font-weight:700;white-space:nowrap;border:1px solid rgba(148,163,184,.18);background:rgba(2,6,23,.4);color:rgba(226,232,240,.6);transition:all .18s}
+.room-pill:hover{background:rgba(99,102,241,.2);border-color:rgba(99,102,241,.25);color:#a5b4fc}
+.room-pill.active{background:linear-gradient(135deg,rgba(99,102,241,.45),rgba(79,70,229,.4));border-color:rgba(99,102,241,.5);color:#fff;box-shadow:0 2px 14px rgba(99,102,241,.3)}
 .room-pill-dot{width:6px;height:6px;border-radius:50%;background:rgba(148,163,184,.4);transition:all .2s;flex-shrink:0}
 .room-pill.offline{background:rgba(239,68,68,.15);border-color:rgba(239,68,68,.35);color:rgba(252,165,165,.9)}
 .room-pill.offline .room-pill-dot{background:rgba(239,68,68,.9);box-shadow:0 0 6px rgba(239,68,68,.6);animation:offBlink 1.2s ease-in-out infinite}
@@ -1774,29 +1818,29 @@ ha-card{border-radius:20px;overflow:hidden;font-family:'Segoe UI',system-ui,sans
 .sync-cb-icon{font-size:13px;line-height:1;transition:transform .15s}
 .sync-cb-label:hover .sync-cb-icon{transform:scale(1.2)}
 .sync-cb-label.synced .sync-cb-icon{filter:drop-shadow(0 0 4px rgba(34,197,94,.6))}
-.sync-bar{border-radius:12px;background:linear-gradient(135deg,rgba(6,9,18,.7),rgba(2,6,23,.8));border:1px solid rgba(139,92,246,.2);padding:8px 12px;margin-bottom:8px}
+.sync-bar{border-radius:12px;background:linear-gradient(135deg,rgba(6,9,18,.7),rgba(2,6,23,.8));border:1px solid rgba(99,102,241,.2);padding:8px 12px;margin-bottom:8px}
 .sync-bar-inner{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .sync-bar-left{display:flex;align-items:center;gap:6px;flex-wrap:wrap;flex:1;min-width:0}
-.sync-bar-label{font-size:10px;font-weight:900;color:rgba(139,92,246,.9);letter-spacing:1px;flex-shrink:0}
+.sync-bar-label{font-size:10px;font-weight:900;color:rgba(99,102,241,.9);letter-spacing:1px;flex-shrink:0}
 .sync-room-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
 .sync-room-badge.ok{background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.35);color:#86efac}
 .sync-room-badge.pending{background:rgba(234,179,8,.1);border:1px solid rgba(234,179,8,.25);color:#fbbf24;animation:syncPending 1.5s ease-in-out infinite}
 @keyframes syncPending{0%,100%{opacity:1}50%{opacity:.5}}
 .sync-bar-right{display:flex;align-items:center;gap:6px;flex-shrink:0}
-.sync-btn{padding:5px 10px;border-radius:8px;cursor:pointer;font-size:10px;font-weight:700;border:1px solid rgba(139,92,246,.3);background:rgba(109,40,217,.25);color:#c4b5fd;transition:all .15s;white-space:nowrap}
-.sync-btn:hover{background:rgba(109,40,217,.5);border-color:rgba(139,92,246,.5);transform:translateY(-1px)}
+.sync-btn{padding:5px 10px;border-radius:8px;cursor:pointer;font-size:10px;font-weight:700;border:1px solid rgba(99,102,241,.3);background:rgba(99,102,241,.25);color:#a5b4fc;transition:all .15s;white-space:nowrap}
+.sync-btn:hover{background:rgba(99,102,241,.5);border-color:rgba(99,102,241,.5);transform:translateY(-1px)}
 .sync-auto-on{background:linear-gradient(135deg,rgba(34,197,94,.3),rgba(21,128,61,.25));border-color:rgba(34,197,94,.4);color:#86efac;animation:autoSyncPulse 2s ease-in-out infinite}
 @keyframes autoSyncPulse{0%,100%{box-shadow:0 0 0 0 rgba(34,197,94,.3)}50%{box-shadow:0 0 8px 3px rgba(34,197,94,.2)}}
 .sync-btn-busy{opacity:.6;cursor:not-allowed!important;animation:syncBusy .8s ease-in-out infinite}
 @keyframes syncBusy{0%,100%{opacity:.6}50%{opacity:.3}}
-.room-volumes{border-radius:12px;background:rgba(2,6,23,.5);border:1px solid rgba(139,92,246,.15);padding:8px 12px;margin-bottom:8px}
+.room-volumes{border-radius:12px;background:rgba(2,6,23,.5);border:1px solid rgba(99,102,241,.15);padding:8px 12px;margin-bottom:8px}
 .room-vol-row{display:flex;align-items:center;gap:8px;margin-bottom:5px}
 .room-vol-row:last-child{margin-bottom:0}
 .room-vol-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-.room-vol-name{font-size:12px;font-weight:700;min-width:64px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
+.room-vol-name{font-size:10px;font-weight:700;min-width:64px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
 .room-vol-row input[type=range]{flex:1;-webkit-appearance:none;height:4px;border-radius:999px;outline:none;cursor:pointer;background:rgba(148,163,184,.18)}
-.room-vol-row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:var(--rv-color,#7c3aed);border:2px solid rgba(255,255,255,.3);cursor:pointer}
-.room-vol-label{font-size:12px;color:rgba(226,232,240,.6);min-width:18px;text-align:right;font-family:monospace}
+.room-vol-row input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:var(--rv-color,#6366f1);border:2px solid rgba(255,255,255,.3);cursor:pointer}
+.room-vol-label{font-size:10px;color:rgba(226,232,240,.6);min-width:18px;text-align:right;font-family:monospace}
 @keyframes offBlink{0%,100%{opacity:1}50%{opacity:.3}}
 .offline-overlay{position:absolute;inset:0;z-index:50;background:rgba(6,9,18,.92);border-radius:12px;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
 .offline-box{text-align:center;padding:24px 20px;display:flex;flex-direction:column;align-items:center;gap:8px}
@@ -1806,14 +1850,14 @@ ha-card{border-radius:20px;overflow:hidden;font-family:'Segoe UI',system-ui,sans
 .offline-host{font-size:10px;color:rgba(226,232,240,.4);font-family:monospace}
 .offline-retry{font-size:12px;color:rgba(226,232,240,.6);margin-top:4px}
 .offline-retry b{color:#fbbf24}
-.offline-btn{margin-top:8px;padding:10px 24px;border-radius:12px;cursor:pointer;font-size:12px;font-weight:700;border:1px solid rgba(139,92,246,.4);background:linear-gradient(135deg,rgba(109,40,217,.5),rgba(91,33,182,.4));color:#fff;transition:all .15s}
-.offline-btn:hover{box-shadow:0 2px 16px rgba(109,40,217,.5);transform:translateY(-1px)}
-.tabs{display:flex;gap:6px;background:rgba(2,6,23,.5);border:1px solid rgba(148,163,184,.1);padding:5px;border-radius:14px;margin-bottom:12px}
-.tab{flex:1;font-size:13px;padding:8px 6px;border-radius:10px;cursor:pointer;color:rgba(226,232,240,.6);background:transparent;border:none;font-weight:600;transition:all .2s}
-.tab.active{color:#fff;background:rgba(109,40,217,.5);border:1px solid rgba(139,92,246,.3);font-weight:800;box-shadow:0 2px 12px rgba(109,40,217,.25)}
+.offline-btn{margin-top:8px;padding:10px 24px;border-radius:12px;cursor:pointer;font-size:12px;font-weight:700;border:1px solid rgba(99,102,241,.4);background:linear-gradient(135deg,rgba(99,102,241,.5),rgba(79,70,229,.4));color:#fff;transition:all .15s}
+.offline-btn:hover{box-shadow:0 2px 16px rgba(99,102,241,.5);transform:translateY(-1px)}
+.tabs{display:flex;gap:6px;background:rgba(15,23,42,.65);border:1px solid rgba(99,102,241,.2);padding:5px;border-radius:14px;margin-bottom:12px;backdrop-filter:blur(20px) saturate(180%);box-shadow:0 4px 24px rgba(0,0,0,.3),inset 0 1px 0 rgba(255,255,255,.08)}
+.tab{flex:1;font-size:11px;padding:8px 6px;border-radius:10px;cursor:pointer;color:#94a3b8;background:rgba(30,41,59,.4);border:none;font-weight:600;transition:all .2s}
+.tab.active{color:#fff;background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);border:none;font-weight:800;box-shadow:0 4px 16px rgba(99,102,241,.5),inset 0 1px 0 rgba(255,255,255,.2)}
 .body{height:520px;overflow:hidden;position:relative}
 .panel{display:none;position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;padding-right:4px}
-.panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-thumb{background:rgba(139,92,246,.3);border-radius:999px}
+.panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-thumb{background:rgba(99,102,241,.3);border-radius:999px}
 .panel.active{display:block;animation:fadeIn .2s ease}
 @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .media-card{border-radius:16px;overflow:hidden;border:1px solid rgba(148,163,184,.12);background:linear-gradient(180deg,rgba(30,20,60,.9),rgba(10,15,30,.95));padding:14px;margin-bottom:12px}
@@ -1822,115 +1866,123 @@ ha-card{border-radius:20px;overflow:hidden;font-family:'Segoe UI',system-ui,sans
 .mc-title{font-size:15px;font-weight:900;color:#f1f5f9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mc-artist{font-size:11px;color:rgba(226,232,240,.55);margin-top:2px}
 .mc-badges{display:flex;align-items:center;gap:6px;flex-shrink:0}
-.mc-source{font-size:9px;padding:3px 8px;border-radius:6px;background:rgba(109,40,217,.3);border:1px solid rgba(139,92,246,.3);color:#c4b5fd;font-weight:800;letter-spacing:1px}
+.mc-source{font-size:9px;padding:3px 8px;border-radius:6px;background:rgba(99,102,241,.3);border:1px solid rgba(99,102,241,.3);color:#a5b4fc;font-weight:800;letter-spacing:1px}
 .mc-icon-btn{width:28px;height:28px;border-radius:50%;border:1px solid rgba(148,163,184,.15);background:transparent;color:rgba(226,232,240,.5);cursor:pointer;font-size:13px;display:grid;place-items:center;transition:all .15s}
-.mc-icon-btn:hover{background:rgba(109,40,217,.2)}.mc-icon-btn.active-btn{color:#86efac;border-color:rgba(34,197,94,.3)}
-.mc-vis{position:relative;border-radius:14px;overflow:hidden;margin-bottom:0;border:1px solid rgba(139,92,246,.2);background:linear-gradient(135deg,#0c0618 0%,#12082a 100%);display:flex;flex-direction:column;}
-.mc-bg{position:absolute;inset:0;z-index:0;background-size:cover;background-position:center;filter:blur(18px) brightness(.75) saturate(1.5);transform:scale(1.25);opacity:0;transition:opacity .6s ease;}
-.mc-bg.show{opacity:1}
-.mc-vis::after{content:'';position:absolute;inset:0;z-index:1;background:linear-gradient(to bottom,rgba(4,2,12,.05) 0%,rgba(4,2,12,.25) 100%);pointer-events:none;}
-.mc-top{display:flex;align-items:center;gap:11px;padding:12px 14px;position:relative;z-index:2;flex:1;flex-direction:row-reverse;}
-.mc-thumb-wrap{width:72px;height:72px;border-radius:50%;overflow:hidden;flex-shrink:0;border:2.5px solid rgba(139,92,246,.55);box-shadow:0 0 20px rgba(109,40,217,.5);position:relative;}
+.mc-icon-btn:hover{background:rgba(99,102,241,.2)}.mc-icon-btn.active-btn{color:#86efac;border-color:rgba(34,197,94,.3)}
+.mc-vis{position:relative;border-radius:18px;overflow:hidden;margin-bottom:12px;border:1px solid rgba(255,255,255,0.08);background:#050712;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,0.6);min-height:240px;}
+.mc-bg{position:absolute;inset:0;z-index:0;background-size:cover;background-position:center;filter:blur(1px) brightness(0.4) saturate(1.1);transform:scale(1.01);opacity:0;transition:opacity 0.6s ease;}
+.mc-bg.show{opacity:0.92}
+.mc-vis-content{position:relative;z-index:2;display:flex;flex-direction:column;height:100%;padding:16px;flex:1;}
+.mc-header-overlay{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;}
+.mc-info-ov{flex:1;min-width:0;margin-right:12px;}
+.mc-title-ov{font-size:16px;font-weight:900;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 2px 8px rgba(0,0,0,0.6);margin-bottom:2px;}
+.mc-artist-ov{font-size:12px;color:rgba(255,255,255,0.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;}
+.mc-badges-ov{display:flex;flex-direction:column;align-items:flex-end;gap:8px;}
+.mc-source-ov{font-size:9px;padding:3px 8px;border-radius:5px;background:rgba(0,0,0,0.5);color:#fff;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;border:1px solid rgba(255,255,255,0.1);}
+.mc-opt-btns{display:flex;gap:10px;}
+.mc-top-ov{display:flex;align-items:center;gap:24px;flex:1;margin-bottom:12px;}
+.mc-thumb-wrap{width:86px;height:86px;border-radius:50%;overflow:hidden;flex-shrink:0;border:3px solid rgba(255,255,255,.2);box-shadow:0 0 15px rgba(0,0,0,.5);position:relative;background:#1a1a1a;}
 .mc-thumb{width:100%;height:100%;object-fit:cover}
-.mc-thumb.spin{animation:sp 12s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
-.mc-thumb-fb{width:100%;height:100%;display:grid;place-items:center;background:rgba(109,40,217,.18);font-size:28px}
-.waveform-wrap{display:flex;flex-direction:column;align-items:flex-start;flex:1;height:72px;overflow:hidden;position:relative;z-index:2;}
-.waveform{display:flex;align-items:flex-end;justify-content:space-evenly;flex:1;width:100%}
-.wv-style-btn{flex-shrink:0;width:28px;height:28px;border-radius:50%;border:1px solid rgba(139,92,246,.45);background:rgba(109,40,217,.25);color:rgba(167,139,250,.95);cursor:pointer;font-size:14px;display:grid;place-items:center;align-self:flex-start;margin:0 0 4px 2px;transition:all .15s;padding:0;line-height:1;}
-.wv-style-btn:hover{background:rgba(109,40,217,.5);border-color:rgba(139,92,246,.7);transform:scale(1.1)}
-.wv-col{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;position:relative;flex:1;height:100%}
-.wv-bar{width:3px;flex-shrink:0;background:linear-gradient(to top,rgba(88,28,220,.7),rgba(167,139,250,.9));border-radius:2px 2px 1px 1px;will-change:height;height:3px;opacity:.9}
-.wv-ball{position:absolute;bottom:3px;width:5px;height:5px;border-radius:50%;background:#c4b5fd;box-shadow:0 0 4px rgba(167,139,250,.8);left:50%;transform:translateX(-50%);transition:bottom 0.05s linear;pointer-events:none}
-.mc-seek-wrap{position:relative;z-index:2;padding:4px 12px 10px 12px;flex-shrink:0;}
-.mc-seek-row{display:flex;align-items:center;gap:7px}
-.mc-seek-bar{flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,.12);cursor:pointer;position:relative;overflow:visible;}
-.mc-seek-fill{height:100%;background:linear-gradient(to right,#6d28d9,#a78bfa);border-radius:2px;transition:width .4s linear;pointer-events:none;}
-.mc-seek-thumb{position:absolute;top:50%;right:calc(100% - var(--spct,0%));transform:translate(50%,-50%);width:11px;height:11px;border-radius:50%;background:#c4b5fd;box-shadow:0 0 6px rgba(167,139,250,.7);opacity:0;transition:opacity .15s;pointer-events:none;}
-.mc-seek-bar:hover .mc-seek-thumb{opacity:1}
+.mc-thumb.spin{animation:sp 15s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
+.mc-thumb-fb{width:100%;height:100%;display:grid;place-items:center;font-size:36px;background:linear-gradient(135deg,#3b0764,#581c87);color:#fff}
+.waveform-wrap{flex:1;display:flex;align-items:center;position:relative;height:60px;}
+.waveform{display:flex;align-items:flex-end;gap:4px;height:100%;width:100%;justify-content:center;}
+.wv-col{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;flex:1;position:relative;}
+.wv-bar{background:linear-gradient(to top,#7c3aed,#a855f7,#d8b4fe);width:100%;max-width:4px;border-radius:3px;transition:height .1s ease;min-height:4px;opacity:0.9;}
+.wv-ball{position:absolute;width:5px;height:5px;border-radius:50%;background:#f5f3ff;box-shadow:0 0 6px #a855f7;bottom:6px;left:50%;transform:translateX(-50%);transition:bottom 0.05s linear;pointer-events:none;}
+.mc-seek-wrap{margin-top:auto;}
+.mc-seek-row{display:flex;align-items:center;gap:12px;}
+.time-txt{font-size:11px;color:rgba(255,255,255,0.6);font-family:'Outfit',monospace;min-width:38px;font-weight:600;}
+.mc-seek-bar{flex:1;height:3px;background:rgba(255,255,255,0.12);border-radius:2px;position:relative;cursor:pointer;}
+.mc-seek-fill{height:100%;background:linear-gradient(90deg,#7c3aed,#a855f7);border-radius:2px;width:0%;box-shadow:0 0 10px rgba(168,85,247,0.5);}
+.mc-seek-thumb{position:absolute;top:50%;left:0%;width:10px;height:10px;background:#fff;border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 8px rgba(0,0,0,0.5);opacity:0;transition:opacity 0.2s;}
+.mc-seek-bar:hover .mc-seek-thumb{opacity:1;}
 @media(hover:none){.mc-seek-thumb{opacity:1!important}}
 .progress-row{display:flex;align-items:center;gap:8px;margin-bottom:12px}
-.time-txt{font-size:12px;color:rgba(226,232,240,.55);min-width:32px;font-family:monospace}
+.time-txt{font-size:10px;color:rgba(226,232,240,.55);min-width:32px;font-family:monospace}
 .time-txt.right{text-align:right}
 .media-controls{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:14px}
 .ctrl-btn{width:38px;height:38px;border-radius:50%;border:1px solid rgba(148,163,184,.15);background:rgba(2,6,23,.4);color:rgba(226,232,240,.8);cursor:pointer;font-size:14px;display:grid;place-items:center;transition:all .15s}
-.ctrl-btn:hover{background:rgba(109,40,217,.3);border-color:rgba(139,92,246,.3)}
-.ctrl-btn.play{width:52px;height:52px;font-size:20px;background:linear-gradient(135deg,#7c3aed,#5b21b6);border:1px solid rgba(139,92,246,.5);box-shadow:0 4px 20px rgba(109,40,217,.4);color:#fff}
+.ctrl-btn:hover{background:rgba(99,102,241,.3);border-color:rgba(99,102,241,.3)}
+.ctrl-btn.play{width:52px;height:52px;font-size:20px;background:linear-gradient(135deg,#6366f1,#4f46e5);border:1px solid rgba(99,102,241,.5);box-shadow:0 4px 20px rgba(99,102,241,.4);color:#fff}
 .ctrl-btn.stop{background:rgba(239,68,68,.15);border-color:rgba(239,68,68,.25);color:rgba(239,68,68,.9)}
 .ctrl-btn.active-btn{background:rgba(34,197,94,.15);border-color:rgba(34,197,94,.3);color:rgba(34,197,94,.9)}
 .vol-row{display:flex;align-items:center;gap:8px;margin-top:10px;padding:0 2px}
 .vol-icon{font-size:12px;color:rgba(226,232,240,.6)}
-.vol-label{font-size:12px;color:rgba(226,232,240,.5);min-width:40px;text-align:right}
-input[type=range]{flex:1;-webkit-appearance:none;height:5px;border-radius:999px;background:rgba(148,163,184,.2);outline:none;cursor:pointer}
-input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#7c3aed;border:2px solid rgba(167,139,250,.5);cursor:pointer}
+.vol-label{font-size:10px;color:rgba(226,232,240,.5);min-width:40px;text-align:right}
+input[type=range]{flex:1;-webkit-appearance:none;height:4px;border-radius:999px;background:#1e293b;outline:none;cursor:pointer;margin:8px 0;}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#fff;border:2px solid #a855f7;cursor:pointer;box-shadow:0 0 8px rgba(168,85,247,0.6);transition:all .15s;margin-top:-5px;}
+input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2);box-shadow:0 0 12px rgba(168,85,247,0.8);}
+input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:999px;background:rgba(255,255,255,0.1);}
 .search-tabs{display:flex;gap:2px;margin-bottom:8px;border-bottom:1px solid rgba(148,163,184,.12);padding-bottom:6px}
-.stab{padding:5px 10px;cursor:pointer;font-size:13px;font-weight:700;color:rgba(226,232,240,.5);background:transparent;border:none;border-bottom:2px solid transparent;transition:all .15s}
-.stab.active{color:#a78bfa;border-bottom-color:#7c3aed}
+.stab{padding:5px 10px;cursor:pointer;font-size:11px;font-weight:700;color:rgba(226,232,240,.5);background:transparent;border:none;border-bottom:2px solid transparent;transition:all .15s}
+.stab.active{color:#a5b4fc;border-bottom-color:#6366f1}
 .search-row{display:flex;gap:8px;margin-bottom:8px}
 .search-inp{flex:1;background:rgba(2,6,23,.5);border:1px solid rgba(148,163,184,.18);border-radius:12px;padding:9px 12px;color:#e2e8f0;font-size:12px;outline:none}
-.search-inp:focus{border-color:rgba(139,92,246,.5)}
-.search-btn{padding:9px 14px;border-radius:12px;cursor:pointer;background:linear-gradient(135deg,#7c3aed,#5b21b6);border:1px solid rgba(139,92,246,.4);color:#fff;font-size:14px}
+.search-inp:focus{border-color:rgba(99,102,241,.5);box-shadow:0 0 0 3px rgba(99,102,241,.2),0 4px 12px rgba(99,102,241,.15)}
+.search-btn{padding:9px 14px;border-radius:12px;cursor:pointer;background:linear-gradient(135deg,#6366f1,#4f46e5);border:1px solid rgba(99,102,241,.4);color:#fff;font-size:14px}
 .search-results{max-height:160px;overflow-y:auto}
-.search-results::-webkit-scrollbar{width:4px}.search-results::-webkit-scrollbar-thumb{background:rgba(139,92,246,.3);border-radius:999px}
+.search-results::-webkit-scrollbar{width:4px}.search-results::-webkit-scrollbar-thumb{background:rgba(99,102,241,.3);border-radius:999px}
 .result-item{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:10px;cursor:pointer;border:1px solid transparent;transition:all .15s;margin-bottom:4px}
-.result-item:hover{background:rgba(109,40,217,.2);border-color:rgba(139,92,246,.2)}
-.result-thumb{width:36px;height:36px;border-radius:8px;object-fit:cover;background:rgba(109,40,217,.2);flex-shrink:0;font-size:16px;display:grid;place-items:center}
+.result-item:hover{background:rgba(99,102,241,.2);border-color:rgba(99,102,241,.2)}
+.result-thumb{width:36px;height:36px;border-radius:8px;object-fit:cover;background:rgba(99,102,241,.2);flex-shrink:0;font-size:16px;display:grid;place-items:center}
 .result-info{flex:1;min-width:0}
-.result-title{font-size:13px;font-weight:700;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.result-sub{font-size:11px;color:rgba(226,232,240,.5)}
+.result-title{font-size:11px;font-weight:700;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.result-sub{font-size:10px;color:rgba(226,232,240,.5)}
 .result-btns{display:flex;gap:4px;flex-shrink:0}
 .rbtn{padding:5px 10px;border-radius:8px;cursor:pointer;font-size:11px;font-weight:700;border:none;transition:all .15s}
-.rbtn-add{background:rgba(109,40,217,.25);color:#a78bfa;border:1px solid rgba(139,92,246,.3);padding:5px 8px}
-.rbtn-add:hover{background:rgba(109,40,217,.4)}
-.rbtn-play{background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border:1px solid rgba(139,92,246,.4)}
-.rbtn-play:hover{box-shadow:0 2px 10px rgba(109,40,217,.4)}
+.rbtn-add{background:rgba(99,102,241,.25);color:#a5b4fc;border:1px solid rgba(99,102,241,.3);padding:5px 8px}
+.rbtn-add:hover{background:rgba(99,102,241,.4)}
+.rbtn-play{background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;border:1px solid rgba(99,102,241,.4)}
+.rbtn-play:hover{box-shadow:0 2px 10px rgba(99,102,241,.4)}
 .ctrl-section{margin-bottom:12px}
-.section-label{font-size:12px;color:rgba(226,232,240,.45);font-weight:700;letter-spacing:1px;margin-bottom:8px;text-transform:uppercase}
+.section-label{font-size:10px;color:rgba(226,232,240,.45);font-weight:700;letter-spacing:1px;margin-bottom:8px;text-transform:uppercase}
 .toggle-item{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:12px;border:1px solid rgba(148,163,184,.1);background:rgba(2,6,23,.3);margin-bottom:6px}
-.toggle-left .tog-name{font-size:13px;font-weight:800;color:#e2e8f0}
-.toggle-left .tog-desc{font-size:11px;color:rgba(226,232,240,.5);margin-top:2px}
+.toggle-left .tog-name{font-size:12px;font-weight:800;color:#e2e8f0}
+.toggle-left .tog-desc{font-size:10px;color:rgba(226,232,240,.5);margin-top:2px}
 .sw{width:42px;height:24px;border-radius:999px;cursor:pointer;border:1px solid rgba(148,163,184,.2);background:rgba(148,163,184,.12);position:relative;transition:all .2s;flex-shrink:0}
 .sw::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:rgba(226,232,240,.7);transition:all .18s}
 .sw.on{background:rgba(34,197,94,.2);border-color:rgba(34,197,94,.4)}.sw.on::after{left:21px;background:#86efac}
 .sw.unknown{opacity:.5}
 .slider-row{padding:10px 12px;border-radius:12px;border:1px solid rgba(148,163,184,.1);background:rgba(2,6,23,.3);margin-bottom:6px}
 .slider-row-top{display:flex;justify-content:space-between;margin-bottom:6px}
-.slider-row-top .s-name{font-size:13px;font-weight:800;color:#e2e8f0}
-.slider-row-top .s-val{font-size:16px;color:#a78bfa;font-weight:700}
+.slider-row-top .s-name{font-size:12px;font-weight:800;color:#e2e8f0}
+.slider-row-top .s-val{font-size:11px;color:#a5b4fc}
 .sub-tabs{display:flex;gap:4px;margin-bottom:8px}
-.sub-tab{padding:6px 12px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;border:1px solid rgba(148,163,184,.12);background:transparent;color:rgba(226,232,240,.5);transition:all .15s}
-.sub-tab.active{background:rgba(109,40,217,.3);border-color:rgba(139,92,246,.3);color:#c4b5fd}
+.sub-tab{padding:5px 10px;border-radius:8px;cursor:pointer;font-size:10px;font-weight:700;border:1px solid rgba(148,163,184,.12);background:transparent;color:rgba(226,232,240,.5);transition:all .15s}
+.sub-tab.active{background:rgba(99,102,241,.3);border-color:rgba(99,102,241,.4);color:#a5b4fc}
 .eq-container{display:flex;justify-content:space-evenly;align-items:flex-end;padding:8px 0;width:100%}
 .eq-band{display:flex;flex-direction:column;align-items:center;gap:4px;flex:1}
-.eq-band-val{font-size:12px;font-weight:700;color:#a78bfa;text-align:center;min-height:16px;line-height:16px}
+.eq-band-val{font-size:10px;font-weight:700;color:#a5b4fc;text-align:center;min-height:16px;line-height:16px}
 .eq-band input[type=range]{writing-mode:vertical-lr;direction:rtl;-webkit-appearance:slider-vertical;width:22px;height:95px;flex:none;padding:0}
 .eq-band label{font-size:9px;color:rgba(226,232,240,.4)}
 .preset-row{display:flex;flex-wrap:wrap;gap:4px;justify-content:center;margin:6px 0}
-.preset-btn{padding:6px 12px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;border:1px solid rgba(148,163,184,.12);background:rgba(2,6,23,.3);color:rgba(226,232,240,.5);transition:all .15s}
-.preset-btn:hover{background:rgba(109,40,217,.2);border-color:rgba(139,92,246,.2);color:#c4b5fd}
+.preset-btn{padding:4px 10px;border-radius:8px;cursor:pointer;font-size:10px;font-weight:700;border:1px solid rgba(148,163,184,.12);background:rgba(2,6,23,.3);color:rgba(226,232,240,.5);transition:all .15s}
+.preset-btn:hover{background:rgba(99,102,241,.2);border-color:rgba(99,102,241,.2);color:#a5b4fc}
 .collapsible-header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:12px;border:1px solid rgba(148,163,184,.1);background:rgba(2,6,23,.4);cursor:pointer;margin-bottom:6px;transition:all .15s;user-select:none}
-.collapsible-header:hover{background:rgba(109,40,217,.15);border-color:rgba(139,92,246,.2)}
-.collapsible-title{font-size:13px;font-weight:800;color:#e2e8f0;display:flex;align-items:center;gap:6px}
-.collapsible-arrow{font-size:11px;color:rgba(226,232,240,.5);transition:transform .2s}
+.collapsible-header:hover{background:rgba(99,102,241,.15);border-color:rgba(99,102,241,.2)}
+.collapsible-title{font-size:11px;font-weight:800;color:#e2e8f0;display:flex;align-items:center;gap:6px}
+.collapsible-arrow{font-size:10px;color:rgba(226,232,240,.5);transition:transform .2s}
 .collapsible-arrow.open{transform:rotate(180deg)}
 .collapsible-body.closed{display:none}
 .alarm-item{padding:10px 12px;border-radius:12px;border:1px solid rgba(148,163,184,.1);background:rgba(2,6,23,.3);margin-bottom:6px}
 .alarm-time{font-size:22px;font-weight:900;color:#e2e8f0}
-.alarm-meta{font-size:12px;color:rgba(226,232,240,.5);margin-top:3px}
+.alarm-meta{font-size:10px;color:rgba(226,232,240,.5);margin-top:3px}
 .alarm-actions{display:flex;gap:4px;flex-shrink:0}
 .chat-wrap{border-radius:16px;overflow:hidden;border:1px solid rgba(148,163,184,.12);background:rgba(2,6,23,.4);position:relative}
 .chat-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.22;display:none;pointer-events:none}
 .msgs{position:relative;height:240px;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:7px;scroll-behavior:smooth}
-.msgs::-webkit-scrollbar{width:4px}.msgs::-webkit-scrollbar-thumb{background:rgba(139,92,246,.3);border-radius:999px}
+.msgs::-webkit-scrollbar{width:4px}.msgs::-webkit-scrollbar-thumb{background:rgba(99,102,241,.3);border-radius:999px}
 .mrow{display:flex}.mrow.user{justify-content:flex-end}.mrow.server{justify-content:flex-start}
 .bubble{max-width:82%;padding:8px 11px;border-radius:14px;font-size:12px;line-height:1.45;color:#fff}
 .bubble.user{background:linear-gradient(135deg,#1d4ed8,#2563eb);border-radius:14px 14px 4px 14px}
 .bubble.server{background:linear-gradient(135deg,#15803d,#16a34a);border-radius:14px 14px 14px 4px}
 .chat-input-row{display:flex;gap:8px;padding:10px;border-top:1px solid rgba(148,163,184,.1);position:relative}
 .chat-inp{flex:1;background:rgba(2,6,23,.4);border:1px solid rgba(148,163,184,.15);border-radius:12px;padding:9px 12px;color:#e2e8f0;font-size:12px;outline:none}
-.chat-inp:focus{border-color:rgba(139,92,246,.4)}
+.chat-inp:focus{border-color:rgba(99,102,241,.4)}
 .send-btn{width:42px;border-radius:12px;border:1px solid rgba(34,197,94,.3);background:linear-gradient(135deg,rgba(21,128,61,.5),rgba(22,163,74,.4));color:#86efac;cursor:pointer;font-size:15px;display:grid;place-items:center}
 .chat-actions{display:flex;gap:8px;padding:0 10px 8px}
-.chat-action-btn{flex:1;padding:9px;border-radius:12px;cursor:pointer;font-size:13px;font-weight:700;border:1px solid rgba(109,40,217,.3);background:linear-gradient(135deg,rgba(109,40,217,.3),rgba(91,33,182,.25));color:#c4b5fd}
+.chat-action-btn{flex:1;padding:9px;border-radius:12px;cursor:pointer;font-size:11px;font-weight:700;border:1px solid rgba(99,102,241,.3);background:linear-gradient(135deg,rgba(99,102,241,.3),rgba(79,70,229,.25));color:#a5b4fc}
 .chat-action-btn.alt{background:rgba(148,163,184,.1);border-color:rgba(148,163,184,.15);color:rgba(226,232,240,.8)}
 .chat-action-btn.danger{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.2);color:rgba(252,165,165,.9)}
 .chat-action-btn.session-active{background:linear-gradient(135deg,rgba(234,179,8,.35),rgba(161,98,7,.3));border-color:rgba(234,179,8,.4);color:#fde68a;animation:sessionPulse 2s ease-in-out infinite}
@@ -1940,27 +1992,27 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
 .tk-dot{width:8px;height:8px;border-radius:50%;background:rgba(148,163,184,.5);flex-shrink:0;transition:all .2s}
 .tk-dot.on{background:rgba(34,197,94,.9);box-shadow:0 0 8px rgba(34,197,94,.5)}
 .sys-info-item{padding:10px 12px;border-radius:12px;border:1px solid rgba(148,163,184,.1);background:rgba(2,6,23,.3);margin-bottom:8px}
-.sys-label{font-size:12px;color:rgba(226,232,240,.45);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
-.sys-value{font-size:13px;color:#e2e8f0;font-weight:700;word-break:break-all}
+.sys-label{font-size:10px;color:rgba(226,232,240,.45);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.sys-value{font-size:12px;color:#e2e8f0;font-weight:700;word-break:break-all}
 .stat-bar-wrap{height:8px;background:rgba(148,163,184,.12);border-radius:999px;margin-top:6px;overflow:hidden}
 .stat-bar{height:100%;border-radius:999px;transition:width .5s ease}
-.stat-bar.cpu{background:linear-gradient(90deg,#7c3aed,#a78bfa)}
+.stat-bar.cpu{background:linear-gradient(90deg,#6366f1,#a5b4fc)}
 .stat-bar.ram{background:linear-gradient(90deg,#0891b2,#38bdf8)}
 .form-row{margin-bottom:8px}
-.form-label{font-size:12px;color:rgba(226,232,240,.5);margin-bottom:4px}
-.form-inp{width:100%;background:rgba(2,6,23,.4);border:1px solid rgba(148,163,184,.15);border-radius:10px;padding:9px 11px;color:#e2e8f0;font-size:13px;outline:none}
-.form-inp:focus{border-color:rgba(139,92,246,.4)}
+.form-label{font-size:10px;color:rgba(226,232,240,.5);margin-bottom:4px}
+.form-inp{width:100%;background:rgba(2,6,23,.4);border:1px solid rgba(148,163,184,.15);border-radius:10px;padding:8px 10px;color:#e2e8f0;font-size:11px;outline:none}
+.form-inp:focus{border-color:rgba(99,102,241,.4)}
 select.form-inp{cursor:pointer}
-.form-btn{padding:9px 16px;border-radius:10px;cursor:pointer;font-size:13px;font-weight:700;border:1px solid rgba(139,92,246,.3);background:rgba(109,40,217,.3);color:#c4b5fd}
-.form-btn.sm{padding:6px 11px;font-size:12px}
+.form-btn{padding:8px 14px;border-radius:10px;cursor:pointer;font-size:11px;font-weight:700;border:1px solid rgba(99,102,241,.3);background:rgba(99,102,241,.3);color:#a5b4fc}
+.form-btn.sm{padding:6px 10px;font-size:10px}
 .form-btn.danger{background:rgba(239,68,68,.15);border-color:rgba(239,68,68,.25);color:rgba(252,165,165,.9)}
 .form-btn.green{background:rgba(34,197,94,.15);border-color:rgba(34,197,94,.3);color:#86efac}
 .wifi-item{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-radius:10px;border:1px solid rgba(148,163,184,.1);background:rgba(2,6,23,.25);margin-bottom:5px;cursor:pointer}
-.wifi-item:hover{background:rgba(109,40,217,.1)}
-.wifi-ssid{font-size:13px;color:#e2e8f0;font-weight:700}
-.wifi-rssi{font-size:11px;color:rgba(226,232,240,.5)}
+.wifi-item:hover{background:rgba(99,102,241,.1)}
+.wifi-ssid{font-size:11px;color:#e2e8f0;font-weight:700}
+.wifi-rssi{font-size:10px;color:rgba(226,232,240,.5)}
 .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;z-index:200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px}
-.modal-box{background:linear-gradient(180deg,#0f172a,#0a0f1e);border:1px solid rgba(139,92,246,.2);border-radius:18px;padding:18px;max-width:420px;width:100%;max-height:85vh;overflow-y:auto}
+.modal-box{background:linear-gradient(180deg,#0f172a,#0a0f1e);border:1px solid rgba(99,102,241,.2);border-radius:18px;padding:18px;max-width:420px;width:100%;max-height:85vh;overflow-y:auto}
 .modal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .modal-head h3{font-size:14px;font-weight:900;color:#e2e8f0}
 .modal-close{background:none;border:none;color:rgba(226,232,240,.5);cursor:pointer;font-size:18px;padding:4px}
@@ -1971,21 +2023,21 @@ select.form-inp{cursor:pointer}
 .pl-btns{display:flex;gap:3px;margin-left:8px}
 .al-days{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
 .al-days label{display:flex;align-items:center;gap:3px;font-size:10px;color:rgba(226,232,240,.6);cursor:pointer}
-.al-days input{width:14px;height:14px;accent-color:#7c3aed}
+.al-days input{width:14px;height:14px;accent-color:#6366f1}
 .toast{position:fixed;z-index:9999;left:50%;transform:translateX(-50%);bottom:16px;background:rgba(2,6,23,.9);border:1px solid rgba(148,163,184,.2);color:#e2e8f0;padding:9px 14px;border-radius:12px;font-size:11px;opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;white-space:nowrap}
 .toast.on{opacity:1;transform:translateX(-50%) translateY(-6px)}
 .toast.success{border-color:rgba(34,197,94,.3);color:#86efac}
 .toast.error{border-color:rgba(239,68,68,.3);color:#fca5a5}
 .fx{display:flex}.aic{align-items:center}.jcb{justify-content:space-between}.g4{gap:4px}.g6{gap:6px}.g8{gap:8px}.mt6{margin-top:6px}.mt8{margin-top:8px}.mb6{margin-bottom:6px}.mb8{margin-bottom:8px}.f1{flex:1;min-width:0}.o5{opacity:.5}
 .hidden{display:none!important}
-@media(max-width:480px){.wrap{padding:10px 10px 8px}.title-text{font-size:14px}.badge-icon{width:28px;height:28px;font-size:13px}.tabs{padding:4px;gap:4px}.tab{font-size:11px;padding:7px 4px}.body{height:auto;min-height:420px;max-height:90vh}.mc-thumb-wrap{width:60px;height:60px}.waveform-wrap{height:60px!important}.mc-title{font-size:13px}.ctrl-btn{width:34px;height:34px;font-size:13px}.ctrl-btn.play{width:46px;height:46px;font-size:18px}.msgs{height:200px}.bubble{font-size:11px}.toggle-left .tog-name{font-size:12px}.sw{width:38px;height:22px}.sw::after{width:14px;height:14px;top:3px;left:3px}.sw.on::after{left:19px}.rbtn{font-size:11px;padding:4px 8px}.eq-band input[type=range]{height:70px}.eq-band-val{font-size:10px}input[type=range]::-webkit-slider-thumb{width:20px;height:20px}.mc-seek-thumb{opacity:1!important;width:14px;height:14px}.sync-bar-inner{flex-direction:column;align-items:flex-start}.sync-bar-right{flex-wrap:wrap}}
+@media(max-width:480px){.wrap{padding:10px 10px 8px}.title-text{font-size:14px}.badge-icon{width:28px;height:28px;font-size:13px}.tabs{padding:4px;gap:4px}.tab{font-size:10px;padding:7px 4px}.body{height:auto;min-height:420px;max-height:90vh}.mc-thumb-wrap{width:60px;height:60px}.waveform-wrap{height:60px!important}.mc-title{font-size:13px}.ctrl-btn{width:34px;height:34px;font-size:13px}.ctrl-btn.play{width:46px;height:46px;font-size:18px}.msgs{height:200px}.bubble{font-size:11px}.toggle-left .tog-name{font-size:11px}.sw{width:38px;height:22px}.sw::after{width:14px;height:14px;top:3px;left:3px}.sw.on::after{left:19px}.rbtn{font-size:10px;padding:4px 8px}.eq-band input[type=range]{height:70px}.eq-band-val{font-size:9px}input[type=range]::-webkit-slider-thumb{width:20px;height:20px}.mc-seek-thumb{opacity:1!important;width:14px;height:14px}.sync-bar-inner{flex-direction:column;align-items:flex-start}.sync-bar-right{flex-wrap:wrap}}
 </style>
 `;
     this._setConnDot(this._wsConnected);
     if (this._rooms) this._renderRoomPills();
     if (this._offline) this._setOffline(true, this._retryIn * 1000);
     this._renderMedia(); this._renderVolume();
-    this._renderControlToggles(); this._renderLight();
+    this._renderControlToggles(); this._renderLight(); this._renderStereo();
     this._renderWakeWord(); this._renderCustomAi(); this._renderVoice();
     this._renderOta(); this._renderHass();
     this._renderWifiStatus(); this._renderWifiSaved();
@@ -2002,37 +2054,41 @@ select.form-inp{cursor:pointer}
   ${this._rooms && this._rooms.length > 1 ? `<div class="sync-bar" id="syncBar" style="display:none"></div>` : ''}
   ${this._rooms && this._rooms.length > 1 ? `<div class="room-volumes" id="roomVolumes" style="display:none"></div>` : ''}
   <div class="media-card">
-    <div class="mc-header">
-      <div class="mc-info">
-        <div class="mc-title" id="mediaTitle">Không có nhạc</div>
-        <div class="mc-artist" id="mediaArtist">---</div>
-      </div>
-      <div class="mc-badges">
-        <span class="mc-source" id="sourceLabel">IDLE</span>
-        <button class="mc-icon-btn" id="btnRepeat" title="Repeat">↻</button>
-        <button class="mc-icon-btn" id="btnShuffle" title="Shuffle">⇄</button>
-      </div>
-    </div>
     <div class="mc-vis" id="mcVis">
       <div class="mc-bg" id="mcBg"></div>
-      <div class="mc-top">
-        <div class="mc-thumb-wrap">
-          <img id="mediaThumb" class="mc-thumb" style="display:none" />
-          <div id="thumbFallback" class="mc-thumb-fb">🎵</div>
-        </div>
-        <div class="waveform-wrap" id="waveformWrap" style="display:none">
-          <button class="wv-style-btn" id="btnWaveStyle" title="Đổi kiểu hiệu ứng">⚬</button>
-          <div class="waveform" id="waveform">${wvContent}</div>
-        </div>
-      </div>
-      <div class="mc-seek-wrap">
-        <div class="mc-seek-row">
-          <span class="time-txt" id="posText">0:00</span>
-          <div class="mc-seek-bar" id="seekWrap">
-            <div class="mc-seek-fill" id="seekBar"></div>
-            <div class="mc-seek-thumb" id="seekThumb"></div>
+      <div class="mc-vis-content">
+        <div class="mc-header-overlay">
+          <div class="mc-info-ov">
+            <div class="mc-title-ov" id="mediaTitle">Không có nhạc</div>
+            <div class="mc-artist-ov" id="mediaArtist">---</div>
           </div>
-          <span class="time-txt right" id="durText">0:00</span>
+          <div class="mc-badges-ov">
+            <span class="mc-source-ov" id="sourceLabel">IDLE</span>
+            <div class="mc-opt-btns">
+              <button class="mc-icon-btn sm" id="btnWaveStyle" title="Wave Style">⚬</button>
+              <button class="mc-icon-btn sm" id="btnRepeat" title="Repeat">↻</button>
+              <button class="mc-icon-btn sm" id="btnShuffle" title="Shuffle">⇄</button>
+            </div>
+          </div>
+        </div>
+        <div class="mc-top-ov">
+          <div class="mc-thumb-wrap">
+            <img id="mediaThumb" class="mc-thumb" style="display:none" />
+            <div id="thumbFallback" class="mc-thumb-fb">🎵</div>
+          </div>
+          <div class="waveform-wrap" id="waveformWrap" style="display:none">
+            <div class="waveform" id="waveform">${wvContent}</div>
+          </div>
+        </div>
+        <div class="mc-seek-wrap">
+          <div class="mc-seek-row">
+            <span class="time-txt" id="posText">0:00</span>
+            <div class="mc-seek-bar" id="seekWrap">
+              <div class="mc-seek-fill" id="seekBar"></div>
+              <div class="mc-seek-thumb" id="seekThumb"></div>
+            </div>
+            <span class="time-txt" id="durText">0:00</span>
+          </div>
         </div>
       </div>
     </div>
@@ -2075,17 +2131,19 @@ select.form-inp{cursor:pointer}
 <div class="panel ${tab==="control"?"active":""}" id="p-control">
   <div class="ctrl-section">
     <div class="section-label">📡 CONTROL</div>
-    <div class="toggle-item"><div class="toggle-left"><div class="tog-name">🎙 Wake Word (Ô Kề Na Bu)</div></div><div class="sw unknown" id="swWake"></div></div>
-    <div id="wakeSensRow" style="display:none"><div class="slider-row"><div class="slider-row-top"><span class="s-name">Độ nhạy (nên để 0.95~0.99)</span><span class="s-val" id="wakeVal">0.90</span></div><input type="range" id="wakeSlider" min="0" max="1" step="0.01" value="0.90" style="width:100%" /><div class="fx jcb" style="font-size:9px;color:rgba(226,232,240,.35)"><span>Dễ kích hoạt</span><span>Khó kích hoạt</span></div></div></div>
-    <div class="toggle-item" id="customAiRow" style="display:none"><div class="toggle-left"><div class="tog-name">🧠 Chống Điếc AI</div><div class="tog-desc">Khi bật sẽ nhận diện giọng nói chuẩn 99% và đổi giọng AI</div></div><div class="sw unknown" id="swCustomAi"></div></div>
+    <div class="toggle-item"><div class="toggle-left"><div class="tog-name">🎙 Wake Word(Ô Kề Na Bu)</div></div><div class="sw unknown" id="swWake"></div></div>
+    <div id="wakeSensRow" style="display:none"><div class="slider-row"><div class="slider-row-top"><span class="s-name">Độ nhạy(nên để 0.95-0.99)</span><span class="s-val" id="wakeVal">0.90</span></div><input type="range" id="wakeSlider" min="0" max="1" step="0.01" value="0.90" style="width:100%" /><div class="fx jcb" style="font-size:9px;color:rgba(226,232,240,.35)"><span>Dễ kích hoạt</span><span>Khó kích hoạt</span></div></div></div>
   </div>
-  <div class="ctrl-section" id="voiceRow" style="display:none"><div class="section-label">🎤 Chọn Giọng Nói AI</div><div class="fx g4 aic"><select class="form-inp" id="voiceSel" style="flex:1">${voiceOpts}</select><button class="form-btn sm" id="btnVoicePv">▶ Play</button></div></div>
-  <div class="ctrl-section" id="live2dRow" style="display:none"><div class="section-label">👤 Chọn Model Live2D</div><select class="form-inp" id="live2dSel"><option value="hiyori">Hiyori</option><option value="mao">Mao</option><option value="miara">Miara</option><option value="nicole">Nicole</option><option value="changli">Changli</option></select></div>
+  <div class="ctrl-section" id="live2dRow"><div class="section-label">🎭 Chọn Model Live2D</div><select class="form-inp" id="live2dSel"><option value="hiyori">Hiyori</option><option value="mao">Mao</option><option value="miara">Miara</option><option value="nicole">Nicole</option><option value="changli">Changli</option></select></div>
   <div class="ctrl-section">
     <div class="toggle-item"><div class="toggle-left"><div class="tog-name">📡 DLNA</div></div><div class="sw unknown" id="swDlna"></div></div>
     <div class="toggle-item"><div class="toggle-left"><div class="tog-name">🍎 AirPlay</div></div><div class="sw unknown" id="swAirplay"></div></div>
     <div class="toggle-item"><div class="toggle-left"><div class="tog-name">🔵 Bluetooth</div></div><div class="sw unknown" id="swBt"></div></div>
-    <div class="toggle-item"><div class="toggle-left"><div class="tog-name">💡 Đèn LED Chờ (Tắt để nháy theo nhạc)</div></div><div class="sw unknown" id="swLed"></div></div>
+    <div class="toggle-item"><div class="toggle-left"><div class="tog-name">💡 Đèn LED Chờ(Tắt để nháy theo nhạc)</div></div><div class="sw unknown" id="swLed"></div></div>
+  </div>
+  <div class="ctrl-section" id="voiceRow" style="display:none"><div class="section-label">🎤 Chọn Giọng Nói AI</div><div class="fx g4 aic"><select class="form-inp" id="voiceSel" style="flex:1">${voiceOpts}</select><button class="form-btn sm" id="btnVoicePv">▶ Play</button></div></div>
+  <div class="ctrl-section" id="customAiRow" style="display:none">
+    <div class="toggle-item"><div class="toggle-left"><div class="tog-name">🧠 Chống Điếc AI</div><div class="tog-desc">Nâng cao nhận diện giọng nói</div></div><div class="sw unknown" id="swCustomAi"></div></div>
   </div>
   <div class="ctrl-section">
     <div class="collapsible-header" id="audioCollHeader"><span class="collapsible-title">🎛 Audio Engine</span><span class="collapsible-arrow ${audioOpen ? 'open' : ''}" id="audioArrow">▼</span></div>
@@ -2100,8 +2158,6 @@ select.form-inp{cursor:pointer}
         <div class="preset-row">${['flat','bass','vocal','rock','jazz'].map(p=>`<button class="preset-btn" data-pr="${p}">${p==='bass'?'Bass Boost':p.charAt(0).toUpperCase()+p.slice(1)}</button>`).join('')}</div>
         <div class="toggle-item mt6"><div class="toggle-left"><div class="tog-name">🎵 Tăng cường bass</div></div><div class="sw" id="swBass"></div></div>
         <div class="slider-row"><div class="slider-row-top"><span class="s-name">Strength</span><span class="s-val" id="bassVal">0%</span></div><input type="range" id="bassSlider" min="0" max="1000" step="10" value="0" style="width:100%" /><div class="fx jcb" style="font-size:9px;color:rgba(226,232,240,.35)"><span>0%</span><span>50%</span><span>100%</span></div></div>
-        <div class="toggle-item mt6"><div class="toggle-left"><div class="tog-name">🔊 Độ lớn âm thanh</div></div><div class="sw" id="swLoud"></div></div>
-        <div class="slider-row"><div class="slider-row-top"><span class="s-name">Gain</span><span class="s-val" id="loudVal">0.0 dB</span></div><input type="range" id="loudSlider" min="-3000" max="3000" value="0" style="width:100%" /><div class="fx jcb" style="font-size:9px;color:rgba(226,232,240,.35)"><span>-30 dB</span><span>0 dB</span><span>+30 dB</span></div></div>
         <div class="section-label mt8">🔊 Dải Trung-Cao</div>
         <div class="slider-row"><div class="slider-row-top"><span class="s-name">Âm trầm trung</span><span class="s-val" id="bvVal">+0 dB</span></div><input type="range" id="bvSlider" min="211" max="251" value="231" style="width:100%" /><div class="fx jcb" style="font-size:9px;color:rgba(226,232,240,.35)"><span>-20 dB</span><span>0 dB</span><span>+20 dB</span></div></div>
         <div class="slider-row"><div class="slider-row-top"><span class="s-name">Âm nốt cao</span><span class="s-val" id="hvVal">+0 dB</span></div><input type="range" id="hvSlider" min="211" max="251" value="231" style="width:100%" /><div class="fx jcb" style="font-size:9px;color:rgba(226,232,240,.35)"><span>-20 dB</span><span>0 dB</span><span>+20 dB</span></div></div>
@@ -2112,6 +2168,19 @@ select.form-inp{cursor:pointer}
         <div class="slider-row"><div class="slider-row-top"><span class="s-name">🌌 Space</span><span class="s-val" id="surSVal">10</span></div><input type="range" id="surS" min="0" max="100" value="10" style="width:100%" /></div>
         <div class="preset-row"><button class="preset-btn" data-sur="cinema">🎬 Cinema</button><button class="preset-btn" data-sur="wide">🌌 Wide Space</button><button class="preset-btn" data-sur="reset">↺ Reset</button></div>
       </div>
+    </div>
+  </div>
+  <div class="ctrl-section">
+    <div class="collapsible-header" id="stereoCollHeader"><span class="collapsible-title">🔊 Stereo Mode (TWS)</span><span class="collapsible-arrow ${this._stereoOpen ? 'open' : ''}" id="stereoArrow">▼</span></div>
+    <div class="collapsible-body ${this._stereoOpen ? '' : 'closed'}" id="stereoCollBody">
+      <div class="toggle-item mt6"><div class="toggle-left"><div class="tog-name">Stereo Mode - Loa Mẹ</div></div><div class="sw unknown" id="swStereo"></div></div>
+      <div id="stereoMasterOpts" style="display:none">
+        <div class="form-row mt6"><div class="form-label">Loa Con IP</div>
+        <div class="fx g4"><input class="form-inp" id="stereoSlaveIp" placeholder="192.168.x.x" autocomplete="off"/><button class="form-btn sm" id="btnStereoSaveIp">Lưu</button></div></div>
+        <div class="sub-tabs mt6"><button class="sub-tab" id="btnStLeft" data-stch="left">Trái</button><button class="sub-tab" id="btnStRight" data-stch="right">Phải</button><button class="sub-tab" id="btnStStereo" data-stch="stereo">Stereo</button></div>
+        <div class="slider-row mt6"><div class="slider-row-top"><span class="s-name">Sync Delay (ms)</span><span class="s-val" id="stDelayVal">0</span></div><input type="range" id="stDelaySlider" min="0" max="2000" step="50" value="0" style="width:100%" /></div>
+      </div>
+      <div class="toggle-item mt8"><div class="toggle-left"><div class="tog-name">Stereo Mode - Loa Con</div></div><div class="sw unknown" id="swStereoReceiver"></div></div>
     </div>
   </div>
   <div class="ctrl-section">
@@ -2162,7 +2231,18 @@ select.form-inp{cursor:pointer}
   }
 
   _panelSystem(tab) {
-    const roomInfo = this._rooms ? `<div class="sys-info-item mb6"><div class="sys-label">Thiết bị đang chọn</div><div class="sys-value" style="color:#a78bfa">${this._esc(this._rooms[this._currentRoomIdx||0]?.name||"—")}</div><div style="font-size:10px;color:rgba(226,232,240,.4);margin-top:3px">${this._esc(this._rooms[this._currentRoomIdx||0]?.host||"—")}</div></div>` : '';
+    const roomInfo = this._rooms ? `<div class="sys-info-item mb6"><div class="sys-label">Thiết bị đang chọn</div><div class="sys-value" style="color:#a5b4fc">${this._esc(this._rooms[this._currentRoomIdx||0]?.name||"—")}</div><div style="font-size:10px;color:rgba(226,232,240,.4);margin-top:3px">${this._esc(this._rooms[this._currentRoomIdx||0]?.host||"—")}</div></div>` : '';
+    const wpVal = this._state.weatherProvinceCurrent || "Tự động (theo IP nhà mạng)";
+    const cur = this._state.weatherProvince || "";
+    const curLat = this._state.weatherLat || 0;
+    const curLon = this._state.weatherLon || 0;
+    const wpOpts = '<option value="">🌐 Tự động (theo IP)</option>' + (this._state.weatherProvinceList || []).map(p => {
+      const isSelected = (typeof p === 'object') ? (p.name === cur) : (p === cur);
+      const val = (typeof p === 'object') ? JSON.stringify({name:p.name,lat:p.lat,lon:p.lon}) : p;
+      const label = (typeof p === 'object') ? p.name : p;
+      return `<option value="${this._esc(val)}" ${isSelected ? 'selected' : ''}>${this._esc(label)}</option>`;
+    }).join('');
+    const hpOpts = '<option value="">-- Mặc định --</option>' + this._state.hassPipelines.map(p => `<option value="${this._esc(p.id || p)}" ${(p.id || p) === this._state.hassPipeline ? 'selected' : ''}>${this._esc(p.name || p.id || p)}</option>`).join('');
     return `
 <div class="panel ${tab==="system"?"active":""}" id="p-system">
   ${roomInfo}
@@ -2172,16 +2252,16 @@ select.form-inp{cursor:pointer}
   <div class="fx jcb aic"><div class="sys-value" id="macVal">--</div><span style="font-size:9px;color:rgba(226,232,240,.4)" id="macType"></span></div>
   <div class="fx g4 mt6"><button class="form-btn sm" id="btnMacGet">🔄</button><button class="form-btn sm" id="btnMacRandom">🔀 Random</button><button class="form-btn sm danger" id="btnMacReal">MAC thực</button></div></div>
   <div class="ctrl-section mt8"><div class="section-label">OTA Server</div><div class="form-row"><select class="form-inp" id="otaSel"></select></div><div class="fx g4"><button class="form-btn sm" id="btnOtaRefresh">🔄</button><button class="form-btn sm" id="btnOtaSave">💾 Lưu</button></div></div>
+  <div class="ctrl-section mt8"><div class="section-label">🌤 Vị trí thời tiết</div>
+  <div class="form-row"><div class="form-label">Vị trí hiện tại</div><div class="sys-value" id="weatherProvinceDisplay" style="font-size:11px">${this._esc(wpVal)}</div></div>
+  <div class="form-row"><select class="form-inp" id="weatherProvinceSel">${wpOpts}</select></div>
+  <div class="fx g4"><button class="form-btn sm" id="btnWeatherRefresh">🔄 Làm mới</button><button class="form-btn sm green" id="btnWeatherSave">💾 Lưu vị trí</button></div></div>
   <div class="ctrl-section mt8"><div class="section-label">Home Assistant</div>
   <div class="form-row"><div class="form-label">HA URL</div><input class="form-inp" id="hassUrl" placeholder="http://192.168.x.x:8123" /></div>
   <div class="form-row"><div class="form-label">Agent ID</div><input class="form-inp" id="hassAgent" placeholder="conversation.xxx" /></div>
   <div class="form-row"><div class="form-label">API Key</div><input class="form-inp" id="hassKey" placeholder="eyJ..." type="password" /></div>
-  <button class="form-btn" id="btnHassSave">💾 Lưu HASS</button></div>
-  <div class="ctrl-section mt8"><div class="section-label">Vị trí thời tiết</div>
-  <div id="weatherDisplay" class="sys-info-item mb6"><div class="sys-label">Vị trí hiện tại:</div><div class="sys-value" id="weatherCurrentName" style="color:rgba(226,232,240,.5)">--</div></div>
-  <div class="form-row"><select class="form-inp" id="weatherProvinceSel"><option value="">Tự động (theo IP)</option></select></div>
-  <div class="form-hint" style="font-size:10px;color:rgba(226,232,240,.35);margin:4px 0 8px">Chọn tỉnh/thành phố để lấy thời tiết chính xác hơn</div>
-  <div class="fx g4"><button class="form-btn sm" id="btnWeatherRefresh">🔄 Làm mới</button><button class="form-btn" id="btnWeatherSave">💾 Lưu</button></div></div>
+  <div class="form-row"><div class="form-label">Assist</div><select class="form-inp" id="hassPipeline">${hpOpts}</select></div>
+  <div class="fx g4"><button class="form-btn sm" id="btnHassTest">🔌 Test</button><button class="form-btn sm" id="btnHassScan">🔍 Quét Assist</button><button class="form-btn sm" id="btnHassSave">💾 Lưu HASS</button></div></div>
   <div class="ctrl-section mt8"><div class="section-label">WiFi</div>
   <div id="wifiStatusArea"></div>
   <div class="fx g4 mt6"><button class="form-btn sm" id="btnWifiScan">📡 Quét WiFi</button><button class="form-btn sm" id="btnWifiSavedRef">🔄 Đã lưu</button></div>
@@ -2255,8 +2335,15 @@ select.form-inp{cursor:pointer}
     this.querySelectorAll(".tab").forEach(b => { b.onclick = () => {
       const newTab = b.dataset.tab;
       if (newTab === this._activeTab) return;
+      const prevTab = this._activeTab;
       this._activeTab = newTab;
-      this._render(); this._bind();
+      // Instead of full _render() which destroys all DOM, just toggle panels
+      const prevPanel = this.querySelector(`#p-${prevTab}`);
+      const newPanel = this.querySelector(`#p-${newTab}`);
+      if (prevPanel) prevPanel.classList.remove("active");
+      if (newPanel) newPanel.classList.add("active");
+      this.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+      b.classList.add("active");
       if (this._wsConnected && !this._cardCollapsed) this._loadTab(newTab);
     }; });
 
@@ -2353,6 +2440,26 @@ select.form-inp{cursor:pointer}
       };
     }
 
+    this._on("#audioCollHeader", () => { this._audioOpen = !this._audioOpen; const b = this.querySelector("#audioCollBody"), a = this.querySelector("#audioArrow"); if(b) b.classList.toggle("closed", !this._audioOpen); if(a) a.classList.toggle("open", this._audioOpen); });
+    this._on("#lightCollHeader", () => { this._lightOpen = !this._lightOpen; const b = this.querySelector("#lightCollBody"), a = this.querySelector("#lightArrow"); if(b) b.classList.toggle("closed", !this._lightOpen); if(a) a.classList.toggle("open", this._lightOpen); });
+    this._on("#stereoCollHeader", () => { this._stereoOpen = !this._stereoOpen; const b = this.querySelector("#stereoCollBody"), a = this.querySelector("#stereoArrow"); if(b) b.classList.toggle("closed", !this._stereoOpen); if(a) a.classList.toggle("open", this._stereoOpen); });
+
+    this.querySelectorAll("[data-atab]").forEach(b => { b.onclick = () => { this._activeAudioTab = b.dataset.atab; this.querySelectorAll("[data-atab]").forEach(x=>x.classList.remove("active")); b.classList.add("active"); this.querySelector("#audioEq")?.classList.toggle("hidden", this._activeAudioTab!=="eq"); this.querySelector("#audioSur")?.classList.toggle("hidden", this._activeAudioTab!=="sur"); }; });
+    this.querySelectorAll("[data-ltab]").forEach(b => { b.onclick = () => { this._activeLightTab = b.dataset.ltab; this.querySelectorAll("[data-ltab]").forEach(x=>x.classList.remove("active")); b.classList.add("active"); this.querySelector("#lightMain")?.classList.toggle("hidden", this._activeLightTab!=="main"); this.querySelector("#lightEdge")?.classList.toggle("hidden", this._activeLightTab!=="edge"); }; });
+    
+    // Stereo Mode (TWS)
+    this._on("#swStereo", () => { const en = !this._state.stereoEnabled; this._send({ action: en ? 'stereo_enable' : 'stereo_disable', slave_ip: en ? (this.querySelector("#stereoSlaveIp")?.value || "").trim() : undefined }); });
+    this._on("#swStereoReceiver", () => { const en = !this._state.stereoReceiverEnabled; this._send({ action: en ? 'stereo_enable_receiver' : 'stereo_disable_receiver' }); });
+    this._on("#btnStereoSaveIp", () => { const ip = (this.querySelector("#stereoSlaveIp")?.value || "").trim(); this._send({ action: 'stereo_enable', slave_ip: ip }); this._toast("Đã gửi lệnh cập nhật IP loa con", "success"); });
+    this.querySelectorAll("#btnStLeft, #btnStRight, #btnStStereo").forEach(btn => {
+      btn.onclick = () => { this._send({ action: 'stereo_set_channel', channel: btn.dataset.stch }); };
+    });
+    const dSl = this.querySelector("#stDelaySlider");
+    if (dSl) {
+      dSl.onchange = () => { this._send({ action: 'stereo_set_sync_delay', sync_delay_ms: parseInt(dSl.value) }); };
+      dSl.oninput = () => { const v = this.querySelector("#stDelayVal"); if (v) v.textContent = dSl.value; };
+    }
+
     this._bindSwitch("#swLed", () => { this._ctrlGuard = Date.now(); this._state.ledEnabled = !this._state.ledEnabled; this._send({ action: "led_toggle" }); this._renderControlToggles(); });
     this._bindSwitch("#swDlna", () => { this._ctrlGuard = Date.now(); this._state.dlnaOpen = !this._state.dlnaOpen; this._sendSpk({ type: "Set_DLNA_Open", open: this._state.dlnaOpen ? 1 : 0 }); this._renderControlToggles(); });
     this._bindSwitch("#swAirplay", () => { this._ctrlGuard = Date.now(); this._state.airplayOpen = !this._state.airplayOpen; this._sendSpk({ type: "Set_AirPlay_Open", open: this._state.airplayOpen ? 1 : 0 }); this._renderControlToggles(); });
@@ -2362,19 +2469,9 @@ select.form-inp{cursor:pointer}
       else { this._sendSpk({ type: "send_message", what: 64, arg1: 2, arg2: -1, type_id: "Close Bluetooth" }); }
       this._renderControlToggles();
     });
+    this._bindSwitch("#swBass", () => { this._audioGuard = Date.now(); this._state.bass.enabled = !this._state.bass.enabled; this._sendSpk({ type: "set_bass_enable", enable: this._state.bass.enabled }); this._updateSwitch("#swBass", this._state.bass.enabled); });
+    this._bindSwitch("#swEq", () => { this._audioGuard = Date.now(); this._state.eqEnabled = !this._state.eqEnabled; this._sendSpk({ type: "set_eq_enable", enable: this._state.eqEnabled }); this._updateSwitch("#swEq", this._state.eqEnabled); });
 
-    const audioHdr = this.querySelector("#audioCollHeader");
-    if (audioHdr) { audioHdr.onclick = () => { this._audioOpen = !this._audioOpen; const body = this.querySelector("#audioCollBody"), arrow = this.querySelector("#audioArrow"); if (body) body.classList.toggle("closed", !this._audioOpen); if (arrow) arrow.classList.toggle("open", this._audioOpen); if (this._audioOpen) this._buildEqBands(); }; }
-    const lightHdr = this.querySelector("#lightCollHeader");
-    if (lightHdr) { lightHdr.onclick = () => { this._lightOpen = !this._lightOpen; const body = this.querySelector("#lightCollBody"), arrow = this.querySelector("#lightArrow"); if (body) body.classList.toggle("closed", !this._lightOpen); if (arrow) arrow.classList.toggle("open", this._lightOpen); }; }
-
-    this.querySelectorAll("[data-ltab]").forEach(b => { b.onclick = () => {
-      this._activeLightTab = b.dataset.ltab;
-      this.querySelectorAll("[data-ltab]").forEach(x => x.classList.remove("active")); b.classList.add("active");
-      const lm = this.querySelector("#lightMain"), le = this.querySelector("#lightEdge");
-      if (lm) lm.classList.toggle("hidden", b.dataset.ltab !== "main");
-      if (le) le.classList.toggle("hidden", b.dataset.ltab !== "edge");
-    }; });
     this._bindSwitch("#swLight", () => { this._ctrlGuard = Date.now(); this._state.lightEnabled = !this._state.lightEnabled; this._sendSpkMsg(64, this._state.lightEnabled ? 1 : 0); this._renderLight(); });
     this._bindSlider("#brightSlider", "#brightVal", v => { this._ctrlGuard = Date.now(); this._sendSpkMsg(65, v); }, v => v);
     this._bindSlider("#speedSlider", "#speedVal", v => { this._ctrlGuard = Date.now(); this._sendSpkMsg(66, v); }, v => v);
@@ -2384,39 +2481,27 @@ select.form-inp{cursor:pointer}
       this._updateSwitch("#swEdge", this._state.edgeOn);
     });
     this._bindSlider("#edgeSlider", "#edgeVal", v => {
-      this._ctrlGuard = Date.now(); this._state.edgeInt = v;
+      this._ctrlGuard = Date.now(); if (!this._state.edgeOn) return;
       const h = Math.round((v / 100) * 255).toString(16).padStart(2, '0');
       this._sendSpk({ type_id: 'Turn on light', type: 'shell', shell: `lights_test set 7fffff8000 ${h}${h}${h}` });
     }, v => v + "%");
     this.querySelectorAll("[data-lmode]").forEach(b => { b.onclick = () => { const mode = parseInt(b.dataset.lmode); this._sendSpkMsg(67, mode); this._state.lightMode = mode; }; });
-    this.querySelectorAll("[data-atab]").forEach(b => { b.onclick = () => {
-      this._activeAudioTab = b.dataset.atab;
-      this.querySelectorAll("[data-atab]").forEach(x => x.classList.remove("active")); b.classList.add("active");
-      const eq = this.querySelector("#audioEq"), sur = this.querySelector("#audioSur");
-      if (eq) eq.classList.toggle("hidden", b.dataset.atab !== "eq");
-      if (sur) sur.classList.toggle("hidden", b.dataset.atab !== "sur");
-    }; });
-    this._bindSwitch("#swEq", () => { this._audioGuard = Date.now(); this._state.eqEnabled = !this._state.eqEnabled; this._sendSpk({ type: "set_eq_enable", enable: this._state.eqEnabled }); this._updateSwitch("#swEq", this._state.eqEnabled); });
     this._buildEqBands();
     this.querySelectorAll("[data-pr]").forEach(b => { b.onclick = () => {
       this._audioGuard = Date.now(); const vals = EQ_PRESETS[b.dataset.pr]; if (!vals) return;
       vals.forEach((v, i) => { this._sendSpk({ type: "set_eq_bandlevel", band: i, level: parseInt(v) }); this._state.eqBands[i] = v; });
       this._renderEqBands();
     }; });
-    this._bindSwitch("#swBass", () => { this._audioGuard = Date.now(); this._state.bass.enabled = !this._state.bass.enabled; this._sendSpk({ type: "set_bass_enable", enable: this._state.bass.enabled }); this._updateSwitch("#swBass", this._state.bass.enabled); });
     this._bindSlider("#bassSlider", "#bassVal", v => { this._audioGuard = Date.now(); this._sendSpk({ type: "set_bass_strength", strength: parseInt(v) }); }, v => Math.round(v / 10) + "%");
-    this._bindSwitch("#swLoud", () => { this._audioGuard = Date.now(); this._state.loudness.enabled = !this._state.loudness.enabled; this._sendSpk({ type: "set_loudness_enable", enable: this._state.loudness.enabled }); this._updateSwitch("#swLoud", this._state.loudness.enabled); });
-    this._bindSlider("#loudSlider", "#loudVal", v => { this._audioGuard = Date.now(); this._sendSpk({ type: "set_loudness_gain", gain: parseInt(v) }); }, v => (v / 100).toFixed(1) + " dB");
     this._bindSlider("#bvSlider", "#bvVal", v => { this._audioGuard = Date.now(); this._sendSpk({ type: "sends", list: [{ type: "setMixerValue", controlName: "DAC Digital Volume L", value: String(v) }, { type: "get_eq_config" }] }); }, v => this._dbStr(v));
     this._bindSlider("#hvSlider", "#hvVal", v => { this._audioGuard = Date.now(); this._sendSpk({ type: "sends", list: [{ type: "setMixerValue", controlName: "DAC Digital Volume R", value: String(v) }, { type: "get_eq_config" }] }); }, v => this._dbStr(v));
-    this._bindSlider("#surW", "#surWVal", v => { this._audioGuard = Date.now(); this._applySurround(parseInt(v)); }, v => v);
-    this._bindSlider("#surP", "#surPVal", v => { this._audioGuard = Date.now(); }, v => v);
-    this._bindSlider("#surS", "#surSVal", v => { this._audioGuard = Date.now(); }, v => v);
+    this._bindSlider("#surW", "#surWVal", v => { this._audioGuard = Date.now(); this._sendSpkMsg(60, v); }, v => v);
+    this._bindSlider("#surP", "#surPVal", null, v => v);
+    this._bindSlider("#surS", "#surSVal", null, v => v);
     this.querySelectorAll("[data-sur]").forEach(b => { b.onclick = () => {
       this._audioGuard = Date.now(); let w, p, s;
       if (b.dataset.sur === "cinema") { w=70; p=50; s=30; } else if (b.dataset.sur === "wide") { w=90; p=40; s=60; } else { w=40; p=30; s=10; }
-      this._setSlider("#surW", "#surWVal", w); this._setSlider("#surP", "#surPVal", p); this._setSlider("#surS", "#surSVal", s);
-      this._applySurround(w);
+      this._setSlider("#surW", "#surWVal", w); this._setSlider("#surP", "#surPVal", p); this._setSlider("#surS", "#surSVal", s); this._sendSpkMsg(60, w);
     }; });
 
     this._bindSwitch("#swWake", () => { const en = !this._state.wakeWordEnabled; this._state.wakeWordEnabled = en; this._send({ action: "wake_word_set_enabled", enabled: en }); this._renderWakeWord(); });
@@ -2425,7 +2510,7 @@ select.form-inp{cursor:pointer}
     this._bindSwitch("#swCustomAi", () => { const en = !this._state.customAiEnabled; this._state.customAiEnabled = en; this._send({ action: "custom_ai_set_enabled", enabled: en }); this._renderCustomAi(); });
     const vsel = this.querySelector("#voiceSel"); if (vsel) vsel.onchange = () => this._send({ action: "voice_id_set", voice_id: parseInt(vsel.value) });
     this._on("#btnVoicePv", () => { const vid = parseInt(this.querySelector("#voiceSel")?.value || 1); const a = new Audio(VBASE + (VFILES[vid] || 'ngocanh') + '.mp3'); a.play().catch(() => this._toast("Không phát được", "error")); });
-    const l2d = this.querySelector("#live2dSel"); if (l2d) l2d.onchange = () => this._send({ action: "live2d_set_model", model: l2d.value });
+    const l2d = this.querySelector("#live2dSel"); if (l2d) l2d.onchange = () => this._send({ action: "live2d_model_set", model: l2d.value });
     this._on("#btnAlarmAdd", () => this._showAlarmModal());
     this._on("#btnAlarmRefresh", () => this._send({ action: "alarm_list" }));
     this._renderAlarms();
@@ -2433,7 +2518,7 @@ select.form-inp{cursor:pointer}
     this._on("#chatSend", () => this._sendChat());
     const ci = this.querySelector("#chatInp"); if (ci) ci.onkeypress = e => { if (e.key === "Enter") this._sendChat(); };
     this._on("#btnSession", () => { this._send({ action: "chat_wake_up" }); });
-    this._on("#btnTestMic", () => this._send({ action: "chat_test_mic" }));
+    this._on("#btnTestMic", () => { this._send({ action: "chat_test_mic" }); });
     this._on("#btnChatClear", () => { this._state.chat = []; this._renderChatMsgs(); this._toast("Đã xóa lịch sử chat", "success"); this._send({ action: "chat_clear_history" }); });
     this._on("#btnTikTok", () => { const v = !this._state.tiktokReply; this._state.tiktokReply = v; this._renderTikTok(); this._send({ action: "tiktok_reply_toggle", enabled: v }); });
 
@@ -2442,16 +2527,37 @@ select.form-inp{cursor:pointer}
     this._on("#btnMacReal", () => this._send({ action: "mac_clear" }));
     this._on("#btnOtaRefresh", () => this._send({ action: "ota_get" }));
     this._on("#btnOtaSave", () => { const v = this.querySelector("#otaSel")?.value; if (v) this._send({ action: "ota_set", ota_url: v }); });
-    this._on("#btnHassSave", () => { this._send({ action: "hass_set", url: this.querySelector("#hassUrl")?.value?.trim() || "", agent_id: this.querySelector("#hassAgent")?.value?.trim() || "", api_key: this.querySelector("#hassKey")?.value?.trim() || undefined }); });
-    this._on("#btnWeatherRefresh", () => { this._send({ action: "weather_province_get" }); this._loadWeatherProvinces(); });
-    this._on("#btnWeatherSave", () => {
-      const sel = this.querySelector("#weatherProvinceSel"); if (!sel) return;
-      const val = sel.value;
-      let name = "", lat = 0, lon = 0;
-      if (val) { try { const d = JSON.parse(val); name = d.name; lat = d.lat; lon = d.lon; } catch {} }
-      this._send({ action: "weather_province_set", name, lat, lon });
+    this._on("#btnHassSave", () => { 
+      let key = this.querySelector("#hassKey")?.value?.trim();
+      if (key === "***" || (this._state.hassApiKeyMasked && !key)) key = undefined;
+      this._send({ action: "hass_set", url: this.querySelector("#hassUrl")?.value?.trim() || "", agent_id: this.querySelector("#hassAgent")?.value?.trim() || "", api_key: key }); 
     });
-    this._loadWeatherProvinces();
+    this._on("#btnHassTest", () => {
+      this._toast("🔄 Đang kiểm tra kết nối...", "");
+      this._send({ action: "hass_test" });
+    });
+    this._on("#btnHassScan", () => {
+      this._toast("🔍 Đang tải danh sách Assist...", "");
+      this._fetchHassPipelines();
+    });
+    const hp = this.querySelector("#hassPipeline"); if (hp) hp.onchange = () => this._send({ action: "hass_set", pipeline_id: hp.value });
+    this._on("#btnWeatherRefresh", () => this._send({ action: "weather_province_get" }));
+    this._on("#btnWeatherSave", () => {
+      const sel = this.querySelector("#weatherProvinceSel");
+      if (!sel) return;
+      const val = sel.value;
+      if (!val) {
+        this._send({ action: "weather_province_set", name: "", lat: 0, lon: 0 });
+      } else {
+        try {
+          const data = JSON.parse(val);
+          this._send({ action: "weather_province_set", name: data.name, lat: data.lat, lon: data.lon });
+        } catch(e) {
+          // Fallback: plain string province name
+          this._send({ action: "weather_province_set", name: val, lat: 0, lon: 0 });
+        }
+      }
+    });
     this._on("#btnWifiScan", () => this._send({ action: "wifi_scan" }));
     this._on("#btnWifiSavedRef", () => this._send({ action: "wifi_get_saved" }));
 
@@ -2497,6 +2603,9 @@ select.form-inp{cursor:pointer}
   _renderSearchResults(items, type = "youtube") {
     const el = this.querySelector("#searchResults"); if (!el) return;
     if (!items.length) { el.innerHTML = '<div style="text-align:center;padding:14px;color:rgba(226,232,240,.35);font-size:11px">Không có kết quả</div>'; return; }
+    // Store items data for event delegation
+    el._searchItems = items;
+    el._searchType = type;
     el.innerHTML = items.map((item, i) => {
       const title = item.title || item.name || "---", sub = item.artist || item.channel || "";
       const thumb = item.thumbnail_url || "", dur = item.duration_seconds ? this._fmtTime(item.duration_seconds) : (item.duration || "");
@@ -2504,18 +2613,24 @@ select.form-inp{cursor:pointer}
 <div class="result-info"><div class="result-title">${this._esc(title)}</div><div class="result-sub">${this._esc(sub)}${dur ? " · " + dur : ""}</div></div>
 <div class="result-btns"><button class="rbtn rbtn-add" data-addidx="${i}" title="Thêm vào playlist">+</button><button class="rbtn rbtn-play" data-playidx="${i}">▶ Phát</button></div></div>`;
     }).join("");
-    items.forEach((item, i) => {
-      // ── FIX 4: Add button ─────────────────────────
-      const addBtn = el.querySelector(`[data-addidx="${i}"]`);
-      if (addBtn) addBtn.onclick = (e) => {
+    // Use event delegation on the container instead of per-item onclick
+    // This ensures clicks work even after tab switches that preserve the DOM
+    el.onclick = (e) => {
+      const items = el._searchItems || [];
+      const type = el._searchType || "youtube";
+      const addBtn = e.target.closest('[data-addidx]');
+      const playBtn = e.target.closest('[data-playidx]');
+      if (addBtn) {
         e.stopPropagation();
+        const i = parseInt(addBtn.dataset.addidx);
+        const item = items[i]; if (!item) return;
         this._send({ action: "playlist_list" });
         setTimeout(() => this._showAddToPlaylistModal(item, type), 100);
-      };
-
-      // ── Play button (giữ nguyên) ──────────────────
-      const playBtn = el.querySelector(`[data-playidx="${i}"]`);
-      if (playBtn) playBtn.onclick = (e) => {
+        return;
+      }
+      if (playBtn) {
+        const i = parseInt(playBtn.dataset.playidx);
+        const item = items[i]; if (!item) return;
         let cmd;
         if (type === "playlist") {
           cmd = { action: "playlist_play", playlist_id: item.playlist_id || item.id };
@@ -2556,25 +2671,45 @@ select.form-inp{cursor:pointer}
         this._autoSyncDoneForSong = false;
         this._lastSyncSongTitle   = "";
         this._toast(`▶ ${this._esc(item.title || "")}`, "success");
-      };
-    });
+      }
+    };
   }
 
   _renderPlaylistList(playlists) {
     this._state.playlists = playlists || [];
     const el = this.querySelector("#plList"); if (!el) return;
     if (!playlists.length) { el.innerHTML = '<div style="text-align:center;padding:12px;color:rgba(226,232,240,.35);font-size:11px">Chưa có playlist</div>'; return; }
+    // Store playlist data for event delegation
+    el._playlists = playlists;
     el.innerHTML = playlists.map((pl, i) => `<div class="pl-item"><span class="pl-name">${this._esc(pl.name || "Playlist")}</span><span class="pl-count">${pl.song_count || 0} bài</span><div class="pl-btns"><button class="form-btn sm green" data-plplay="${i}">▶</button><button class="form-btn sm" data-plview="${i}">👁</button><button class="form-btn sm danger" data-pldel="${i}">✕</button></div></div>`).join("");
-    playlists.forEach((pl, i) => {
-      this._on(`[data-plplay="${i}"]`, () => {
-        // Request playlist songs để populate _songCache
+    // Use event delegation on the container
+    el.onclick = (e) => {
+      const pls = el._playlists || [];
+      const playBtn = e.target.closest('[data-plplay]');
+      const viewBtn = e.target.closest('[data-plview]');
+      const delBtn = e.target.closest('[data-pldel]');
+      if (playBtn) {
+        const i = parseInt(playBtn.dataset.plplay);
+        const pl = pls[i]; if (!pl) return;
         this._send({ action: "playlist_get_songs", playlist_id: pl.id });
         this._send({ action: "playlist_play", playlist_id: pl.id });
         this._toast(`▶ ${pl.name}`, "success");
-      });
-      this._on(`[data-plview="${i}"]`, () => this._send({ action: "playlist_get_songs", playlist_id: pl.id }));
-      this._on(`[data-pldel="${i}"]`, () => { if (confirm(`Xóa "${pl.name}"?`)) { this._send({ action: "playlist_delete", playlist_id: pl.id }); } });
-    });
+        return;
+      }
+      if (viewBtn) {
+        const i = parseInt(viewBtn.dataset.plview);
+        const pl = pls[i]; if (!pl) return;
+        this._send({ action: "playlist_get_songs", playlist_id: pl.id });
+        return;
+      }
+      if (delBtn) {
+        const i = parseInt(delBtn.dataset.pldel);
+        const pl = pls[i]; if (!pl) return;
+        if (confirm(`Xóa "${pl.name}"?`)) {
+          this._send({ action: "playlist_delete", playlist_id: pl.id });
+        }
+      }
+    };
   }
 
   _handleMsg(raw) {
@@ -2597,22 +2732,52 @@ select.form-inp{cursor:pointer}
       if (this._state.chat.length === 0) { this._state.chat = d.messages.map(m => ({ type: m.type || m.message_type || "server", content: m.content || "", ts: m.ts || Date.now() })); this._renderChatMsgs(); }
       return;
     }
+    if (d.type === "stereo_state" || d.slave_ip !== undefined || d.receiver_enabled !== undefined) {
+      if (d.enabled !== undefined) this._state.stereoEnabled = !!d.enabled;
+      if (d.channel !== undefined) this._state.stereoChannel = d.channel;
+      if (d.receiver_enabled !== undefined) this._state.stereoReceiverEnabled = !!d.receiver_enabled;
+      if (d.slave_ip !== undefined) this._state.stereoSlaveIp = d.slave_ip;
+      if (d.sync_delay_ms !== undefined) this._state.stereoSyncDelayMs = d.sync_delay_ms;
+      this._renderStereo();
+      // Keep going if it's get_info result
+    }
     if (d.type === "chat_history_cleared" || d.type === "chat_clear_history_result") { this._state.chat = []; this._chatLoaded = true; this._renderChatMsgs(); return; }
     if (d.type === "chat_background" || d.type === "chat_background_result") { this._state.chatBg64 = d.image || d.base64 || ""; this._renderChatBg(); return; }
     if (d.type === "tiktok_reply_state" || d.type === "tiktok_reply_result") { this._state.tiktokReply = !!d.enabled; this._renderTikTok(); return; }
     if (d.type === "led_state" || d.type === "led_get_state_result" || d.type === "led_toggle_result") { if (d.enabled !== undefined) this._state.ledEnabled = !!d.enabled; this._renderControlToggles(); return; }
     if (d.type === "ota_config" || d.type === "ota_get_result" || d.type === "ota_set_result") { if (d.ota_url !== undefined) this._state.otaUrl = d.ota_url; if (Array.isArray(d.options)) this._state.otaOptions = d.options; this._renderOta(); return; }
     if (d.type === "hass_config" || d.type === "hass_get_result" || d.type === "hass_set_result") { this._state.hassUrl = d.url || ""; this._state.hassAgentId = d.agent_id || ""; this._state.hassConfigured = !!d.configured; if (d.api_key === "***") this._state.hassApiKeyMasked = true; this._renderHass(); return; }
-    if (d.type === "wifi_scan_result") { this._state.wifiNetworks = d.networks || []; this._renderWifiScan(); return; }
-    if (["wifi_status","wifi_get_status_result","wifi_status_result","wifi_info"].includes(d.type)) { this._state.wifiStatus = d; this._renderWifiStatus(); return; }
-    if (d.type === "weather_province_state" || d.type === "weather_province_get_result" || d.type === "weather_province_set_result") {
-      if (d.type === "weather_province_set_result") {
-        if (d.success) this._toast(d.name ? `Đã lưu vị trí: ${d.name}` : "Đã chuyển về tự động (theo IP)", "success");
-        else this._toast("Lỗi lưu vị trí thời tiết", "error");
+    if (d.type === "hass_pipelines" || d.type === "hass_pipelines_result" || d.type === "hass_get_pipelines_result" || d.type === "hass_pipelines_get_result") { this._state.hassPipelines = d.pipelines || []; if (d.pipeline_id !== undefined) this._state.hassPipeline = d.pipeline_id; this._renderHass(); return; }
+    if (d.type === "hass_test_result") { 
+      this._toast(d.success ? "✅ Kết nối HA thành công" : "❌ Kết nối HA thất bại: " + (d.error || ""), d.success ? "success" : "error"); 
+      if (d.success) {
+        this._toast("🔍 Đang tải danh sách Assist...", "");
+        this._fetchHassPipelines();
       }
-      this._state.weather = { name: d.name || "", lat: d.lat || 0, lon: d.lon || 0 };
+      return; 
+    }
+    if (d.type === "weather_province_state" || d.type === "weather_province_get_result") {
+      if (d.name !== undefined) this._state.weatherProvince = d.name || "";
+      if (d.lat !== undefined) this._state.weatherLat = d.lat;
+      if (d.lon !== undefined) this._state.weatherLon = d.lon;
+      this._state.weatherProvinceCurrent = d.name || "";
       this._renderWeather(); return;
     }
+    if (d.type === "weather_province_set_result") {
+      if (d.success) {
+        if (d.name !== undefined) this._state.weatherProvince = d.name || "";
+        if (d.lat !== undefined) this._state.weatherLat = d.lat;
+        if (d.lon !== undefined) this._state.weatherLon = d.lon;
+        this._state.weatherProvinceCurrent = d.name || "";
+        this._toast(d.name ? `📍 Đã lưu: ${d.name}` : "🌐 Đã chuyển về tự động (IP)", "success");
+        this._renderWeather();
+      } else {
+        this._toast("❌ Lỗi lưu vị trí thời tiết", "error");
+      }
+      return;
+    }
+    if (d.type === "wifi_scan_result") { this._state.wifiNetworks = d.networks || []; this._renderWifiScan(); return; }
+    if (["wifi_status","wifi_get_status_result","wifi_status_result","wifi_info"].includes(d.type)) { this._state.wifiStatus = d; this._renderWifiStatus(); return; }
     if (d.type === "wifi_saved_result" || d.type === "wifi_saved_list") { this._state.wifiSaved = d.networks || []; this._renderWifiSaved(); return; }
     if (d.type === "search_result") {
       const songs = d.songs || d.results || [];
@@ -2682,6 +2847,10 @@ select.form-inp{cursor:pointer}
       }
       const el = this.querySelector("#plSongs"); if (!el) return;
       el.classList.remove("hidden");
+      // Store songs data for event delegation
+      el._plSongs = d.songs || [];
+      el._plId = plId;
+      el._plName = d.playlist_name || "";
       el.innerHTML = `<div class="fx jcb aic mb6"><span style="font-size:10px;font-weight:700;color:rgba(226,232,240,.6)">📋 ${this._esc(d.playlist_name||'')} (${(d.songs||[]).length} bài)</span><button class="form-btn sm" id="closePlSongs">✕</button></div>` +
         (d.songs?.length ? d.songs.map((s, i) => `<div class="result-item">
           ${s.thumbnail_url ? `<img class="result-thumb" src="${this._esc(s.thumbnail_url)}" onerror="this.style.display='none'" />` : '<div class="result-thumb">🎵</div>'}
@@ -2690,12 +2859,20 @@ select.form-inp{cursor:pointer}
             <button class="rbtn rbtn-play" data-plsplay="${i}">▶</button>
             <button class="form-btn sm danger" data-rmsong="${i}">✕</button>
           </div></div>`).join("") : '<div style="text-align:center;padding:8px;font-size:10px;color:rgba(226,232,240,.4)">Trống</div>');
-      this._on("#closePlSongs", () => el.classList.add("hidden"));
-      // Play song in playlist
-      el.querySelectorAll("[data-plsplay]").forEach(btn => {
-        btn.onclick = () => {
-          const sidx = parseInt(btn.dataset.plsplay);
-          const s = (d.songs||[])[sidx]; if (!s) return;
+      // Use event delegation on the container
+      el.onclick = (e) => {
+        const closeBtn = e.target.closest('#closePlSongs');
+        const playBtn = e.target.closest('[data-plsplay]');
+        const rmBtn = e.target.closest('[data-rmsong]');
+        const songs = el._plSongs || [];
+        const pid = el._plId;
+        if (closeBtn) {
+          el.classList.add("hidden");
+          return;
+        }
+        if (playBtn) {
+          const sidx = parseInt(playBtn.dataset.plsplay);
+          const s = songs[sidx]; if (!s) return;
           let cmd;
           if (s.source === "zing") {
             const sid = s.id || s.song_id || "";
@@ -2719,26 +2896,24 @@ select.form-inp{cursor:pointer}
           }
           this._broadcastCmd(cmd);
           this._toast(`▶ ${this._esc(s.title||'')}`, "success");
-        };
-      });
-      // Remove song
-      el.querySelectorAll("[data-rmsong]").forEach(btn => {
-        btn.onclick = () => {
-          const sidx = parseInt(btn.dataset.rmsong);
+          return;
+        }
+        if (rmBtn) {
+          const sidx = parseInt(rmBtn.dataset.rmsong);
           if (confirm(`Xóa bài #${sidx + 1} khỏi playlist?`)) {
-            this._send({ action: "playlist_remove_song", playlist_id: plId, song_index: sidx });
+            this._send({ action: "playlist_remove_song", playlist_id: pid, song_index: sidx });
             this._toast("🗑 Đã xóa bài hát", "success");
-            setTimeout(() => this._send({ action: "playlist_get_songs", playlist_id: plId }), 300);
+            setTimeout(() => this._send({ action: "playlist_get_songs", playlist_id: pid }), 300);
           }
-        };
-      });
+        }
+      };
       return;
     }
     if (d.type === "wake_word_enabled_state" || d.type === "wake_word_get_enabled_result") { if (d.enabled !== undefined) this._state.wakeWordEnabled = !!d.enabled; this._renderWakeWord(); return; }
     if (d.type === "wake_word_sensitivity_state" || d.type === "wake_word_get_sensitivity_result") { if (d.sensitivity !== undefined) this._state.wakeWordSensitivity = Number(d.sensitivity); this._renderWakeWord(); return; }
     if (d.type === "custom_ai_state" || d.type === "custom_ai_enabled_state" || d.type === "custom_ai_get_enabled_result") { if (d.enabled !== undefined) this._state.customAiEnabled = !!d.enabled; this._renderCustomAi(); return; }
     if (d.type === "voice_id_state" || d.type === "voice_id_get_result") { if (d.voice_id !== undefined) this._state.voiceId = parseInt(d.voice_id); this._renderVoice(); return; }
-    if (d.type === "live2d_model" || d.type === "live2d_get_model_result") { if (d.model) this._state.live2dModel = d.model; const sel = this.querySelector("#live2dSel"); if (sel && d.model) sel.value = d.model; return; }
+    if (d.type === "live2d_model" || d.type === "live2d_model_get_result" || d.type === "live2d_model_set_result") { if (d.model) this._state.live2dModel = d.model; const sel = this.querySelector("#live2dSel"); if (sel && d.model) sel.value = d.model; return; }
     if (d.type === "alarm_list" || d.type === "alarm_list_result") { this._state.alarms = d.alarms || []; this._renderAlarms(); return; }
     if (d.type === "alarm_added") {
       if (d.alarm) { this._state.alarms.push(d.alarm); this._renderAlarms(); } else this._send({ action: "alarm_list" });
@@ -2901,6 +3076,11 @@ select.form-inp{cursor:pointer}
       this._renderVolume();
       return;
     }
+    // Catch-all: show toast for error responses (e.g. unknown action)
+    if (d.type === "error" || d.error) {
+      this._toast("❌ " + (d.message || d.error || "Lỗi không xác định"), "error");
+      return;
+    }
   }
 
   _updateProgressOnly() {
@@ -2963,12 +3143,6 @@ select.form-inp{cursor:pointer}
     if (s) s.value = this._state.speed; if (sv) sv.textContent = this._state.speed;
   }
 
-  _renderEdgeLight() {
-    this._updateSwitch("#swEdge", this._state.edgeOn);
-    const es = this.querySelector("#edgeSlider"), ev = this.querySelector("#edgeVal");
-    if (es) es.value = this._state.edgeInt; if (ev) ev.textContent = this._state.edgeInt + "%";
-  }
-
   _updateSwitch(sel, state) {
     const el = this.querySelector(sel); if (!el) return;
     if (state === null || state === undefined) { el.classList.remove("on"); el.classList.add("unknown"); }
@@ -2987,7 +3161,7 @@ select.form-inp{cursor:pointer}
     const isPrem = this._state.premium === 1, show = isPrem || this._state.customAiEnabled !== null;
     const cr = this.querySelector("#customAiRow"); if (cr) cr.style.display = show ? "flex" : "none";
     const vr = this.querySelector("#voiceRow"); if (vr) vr.style.display = (show && this._state.customAiEnabled) ? "block" : "none";
-    const lr = this.querySelector("#live2dRow"); if (lr) lr.style.display = isPrem ? "block" : "none";
+    const lr = this.querySelector("#live2dRow"); if (lr) lr.style.display = "block";
   }
 
   _renderVoice() { const sel = this.querySelector("#voiceSel"); if (sel && this._state.voiceId) sel.value = this._state.voiceId; }
@@ -3003,6 +3177,83 @@ select.form-inp{cursor:pointer}
     const u = this.querySelector("#hassUrl"), a = this.querySelector("#hassAgent"), k = this.querySelector("#hassKey");
     if (u) u.value = this._state.hassUrl; if (a) a.value = this._state.hassAgentId;
     if (k && this._state.hassApiKeyMasked) k.placeholder = "*** (đã lưu)";
+    const hp = this.querySelector("#hassPipeline");
+    if (hp) {
+      const cur = this._state.hassPipeline;
+      hp.innerHTML = '<option value="">-- Mặc định --</option>' + this._state.hassPipelines.map(p => {
+        const id = p.id || p, name = p.name || p.id || p;
+        return `<option value="${this._esc(id)}" ${id === cur ? 'selected' : ''}>${this._esc(name)}</option>`;
+      }).join('');
+    }
+  }
+
+  _fetchHassPipelines() {
+    // Priority 1: Use window.hass.callWS() (standard HA frontend WebSocket API)
+    // Priority 2: Fallback to speaker API (action: hass_pipelines_get)
+    const tryWs = () => {
+      if (window.hass && window.hass.callWS) {
+        return window.hass.callWS({ type: "assist_pipeline/pipeline/list" })
+          .then(data => {
+            if (data && data.pipelines) {
+              this._state.hassPipelines = data.pipelines;
+              this._renderHass();
+              return true;
+            }
+            return false;
+          })
+          .catch(() => false);
+      }
+      return Promise.resolve(false);
+    };
+    tryWs().then(ok => {
+      if (ok) return;
+      // Fallback: request from speaker directly via correct action name
+      this._send({ action: "hass_pipelines_get" });
+    });
+  }
+
+  _loadWeatherProvinces() {
+    // Load province list with lat/lon from speaker's static JSON
+    const baseUrl = this._config?.host ? `http://${this._config.host}:8081` : '';
+    fetch(`${baseUrl}/vietnam_provinces.json`)
+      .then(r => r.ok ? r.json() : null)
+      .catch(() => null)
+      .then(data => {
+        if (Array.isArray(data) && data.length > 0) {
+          this._state.weatherProvinceList = data; // [{name, lat, lon}, ...]
+        } else {
+          // Fallback to static list (name only)
+          this._state.weatherProvinceList = AiBoxCard._VIETNAM_PROVINCES;
+        }
+        this._renderWeather();
+      });
+  }
+
+
+
+  _renderWeather() {
+    const d = this.querySelector("#weatherProvinceDisplay");
+    const name = this._state.weatherProvince || "";
+    const lat = this._state.weatherLat || 0;
+    const lon = this._state.weatherLon || 0;
+    if (d) {
+      if (name) {
+        d.innerHTML = `📍 ${this._esc(name)} <span style="color:rgba(148,163,184,.5);font-size:10px">(${lat}, ${lon})</span>`;
+      } else {
+        d.textContent = "Tự động (theo IP nhà mạng)";
+      }
+    }
+    const sel = this.querySelector("#weatherProvinceSel");
+    if (sel && (this._state.weatherProvinceList || []).length > 0) {
+      // Only re-render if needed (avoid wiping user interaction)
+      const opts = '<option value="">🌐 Tự động (theo IP)</option>' + (this._state.weatherProvinceList || []).map(p => {
+        const isSelected = (typeof p === 'object') ? (p.name === name) : (p === name);
+        const val = (typeof p === 'object') ? JSON.stringify({name:p.name,lat:p.lat,lon:p.lon}) : p;
+        const label = (typeof p === 'object') ? p.name : p;
+        return `<option value="${this._esc(val)}" ${isSelected ? 'selected' : ''}>${this._esc(label)}</option>`;
+      }).join('');
+      sel.innerHTML = opts;
+    }
   }
 
   _renderWifiStatus() {
@@ -3018,20 +3269,33 @@ select.form-inp{cursor:pointer}
     const el = this.querySelector("#wifiSavedArea"); if (!el || !this._state.wifiSaved.length) return;
     el.innerHTML = '<div style="font-size:10px;font-weight:700;color:rgba(226,232,240,.45);margin-bottom:4px">Đã lưu</div>' +
       this._state.wifiSaved.map((n, i) => { const ssid = n.ssid || n; return `<div class="wifi-item"><span class="wifi-ssid">📶 ${this._esc(ssid)}</span><button class="form-btn sm danger" data-wfdel="${i}">✕</button></div>`; }).join("");
-    this._state.wifiSaved.forEach((n, i) => { this._on(`[data-wfdel="${i}"]`, () => this._send({ action: "wifi_delete_saved", ssid: n.ssid || n })); });
+    // Use event delegation on the container
+    el.onclick = (e) => {
+      const delBtn = e.target.closest('[data-wfdel]');
+      if (delBtn) {
+        const i = parseInt(delBtn.dataset.wfdel);
+        const n = this._state.wifiSaved[i]; if (!n) return;
+        this._send({ action: "wifi_delete_saved", ssid: n.ssid || n });
+      }
+    };
   }
 
   _renderWifiScan() {
     const el = this.querySelector("#wifiScanArea"); if (!el) return;
     el.innerHTML = this._state.wifiNetworks.map(n => `<div class="wifi-item" data-wfssid="${this._esc(n.ssid)}"><div><div class="wifi-ssid">📶 ${this._esc(n.ssid)}</div><div class="wifi-rssi">${n.rssi || ""} dBm ${n.secured ? "🔒" : ""}</div></div></div>`).join("");
-    this._state.wifiNetworks.forEach(n => {
-      const item = el.querySelector(`[data-wfssid="${this._esc(n.ssid)}"]`);
-      if (item) item.onclick = () => {
-        this._showPasswordModal(n.ssid, (pw) => {
-          if (pw !== null) this._send({ action: "wifi_connect", ssid: n.ssid, password: pw });
-        });
-      };
-    });
+    // Use event delegation on the container instead of per-item onclick
+    el.onclick = (e) => {
+      const item = e.target.closest('[data-wfssid]');
+      if (item) {
+        const ssid = item.dataset.wfssid;
+        const n = this._state.wifiNetworks.find(x => x.ssid === ssid);
+        if (n) {
+          this._showPasswordModal(n.ssid, (pw) => {
+            if (pw !== null) this._send({ action: "wifi_connect", ssid: n.ssid, password: pw });
+          });
+        }
+      }
+    };
   }
 
   _renderChatMsgs(scroll = true) {
@@ -3075,67 +3339,19 @@ select.form-inp{cursor:pointer}
     if (cb) cb.style.width = s.cpu + "%"; if (rb) rb.style.width = s.ram + "%";
   }
 
-  _loadWeatherProvinces() {
-    const sel = this.querySelector("#weatherProvinceSel"); if (!sel) return;
-    if (sel.options.length > 1) return; // already loaded
-    const provinces = [
-      {name:"Hà Nội",lat:21.0285,lon:105.8542},{name:"TP. Hồ Chí Minh",lat:10.8231,lon:106.6297},
-      {name:"Đà Nẵng",lat:16.0544,lon:108.2022},{name:"Hải Phòng",lat:20.8449,lon:106.6881},
-      {name:"Cần Thơ",lat:10.0452,lon:105.7469},{name:"An Giang",lat:10.5216,lon:105.1259},
-      {name:"Bà Rịa-Vũng Tàu",lat:10.5417,lon:107.2430},{name:"Bắc Giang",lat:21.2730,lon:106.1946},
-      {name:"Bắc Kạn",lat:22.1473,lon:105.8345},{name:"Bạc Liêu",lat:9.2940,lon:105.7216},
-      {name:"Bắc Ninh",lat:21.1861,lon:106.0763},{name:"Bến Tre",lat:10.2434,lon:106.3756},
-      {name:"Bình Định",lat:13.7820,lon:109.2197},{name:"Bình Dương",lat:11.3254,lon:106.4770},
-      {name:"Bình Phước",lat:11.7512,lon:106.7234},{name:"Bình Thuận",lat:10.9282,lon:108.1022},
-      {name:"Cà Mau",lat:9.1527,lon:105.1961},{name:"Cao Bằng",lat:22.6666,lon:106.2640},
-      {name:"Đắk Lắk",lat:12.7100,lon:108.2378},{name:"Đắk Nông",lat:12.2646,lon:107.6098},
-      {name:"Điện Biên",lat:21.3860,lon:103.0230},{name:"Đồng Nai",lat:10.9453,lon:106.8244},
-      {name:"Đồng Tháp",lat:10.4938,lon:105.6882},{name:"Gia Lai",lat:13.9832,lon:108.0000},
-      {name:"Hà Giang",lat:22.8233,lon:104.9837},{name:"Hà Nam",lat:20.5835,lon:105.9230},
-      {name:"Hà Tĩnh",lat:18.3559,lon:105.8877},{name:"Hải Dương",lat:20.9385,lon:106.3206},
-      {name:"Hậu Giang",lat:9.7579,lon:105.6413},{name:"Hòa Bình",lat:20.8171,lon:105.3382},
-      {name:"Hưng Yên",lat:20.6465,lon:106.0511},{name:"Khánh Hòa",lat:12.2585,lon:109.0526},
-      {name:"Kiên Giang",lat:10.0125,lon:105.0809},{name:"Kon Tum",lat:14.3498,lon:108.0004},
-      {name:"Lai Châu",lat:22.3964,lon:103.4580},{name:"Lâm Đồng",lat:11.5753,lon:108.1429},
-      {name:"Lạng Sơn",lat:21.8460,lon:106.7570},{name:"Lào Cai",lat:22.4856,lon:103.9707},
-      {name:"Long An",lat:10.5360,lon:106.4137},{name:"Nam Định",lat:20.4389,lon:106.1621},
-      {name:"Nghệ An",lat:18.6789,lon:105.6813},{name:"Ninh Bình",lat:20.2506,lon:105.9745},
-      {name:"Ninh Thuận",lat:11.5752,lon:108.9890},{name:"Phú Thọ",lat:21.4220,lon:105.2297},
-      {name:"Phú Yên",lat:13.0882,lon:109.0929},{name:"Quảng Bình",lat:17.4690,lon:106.6003},
-      {name:"Quảng Nam",lat:15.5394,lon:108.0191},{name:"Quảng Ngãi",lat:15.1214,lon:108.8044},
-      {name:"Quảng Ninh",lat:21.0064,lon:107.2925},{name:"Quảng Trị",lat:16.7505,lon:107.1856},
-      {name:"Sóc Trăng",lat:9.6025,lon:105.9740},{name:"Sơn La",lat:21.3270,lon:103.9141},
-      {name:"Tây Ninh",lat:11.3352,lon:106.0988},{name:"Thái Bình",lat:20.4463,lon:106.3365},
-      {name:"Thái Nguyên",lat:21.5942,lon:105.8482},{name:"Thanh Hóa",lat:19.8067,lon:105.7852},
-      {name:"Thừa Thiên Huế",lat:16.4637,lon:107.5909},{name:"Tiền Giang",lat:10.4493,lon:106.3431},
-      {name:"Trà Vinh",lat:9.8127,lon:106.2993},{name:"Tuyên Quang",lat:21.7768,lon:105.2181},
-      {name:"Vĩnh Long",lat:10.2537,lon:105.9722},{name:"Vĩnh Phúc",lat:21.3089,lon:105.6048},
-      {name:"Yên Bái",lat:21.7168,lon:104.8986},
-    ];
-    provinces.forEach(p => {
-      const opt = document.createElement("option");
-      opt.value = JSON.stringify(p);
-      opt.textContent = p.name;
-      sel.appendChild(opt);
-    });
-    this._renderWeather();
-  }
-
-  _renderWeather() {
-    const w = this._state.weather;
-    const nameEl = this.querySelector("#weatherCurrentName");
-    if (nameEl) {
-      if (w.name) nameEl.innerHTML = `<span style="color:#86efac">📍 ${this._esc(w.name)}</span> <span style="font-size:10px;color:rgba(226,232,240,.4)">(${w.lat}, ${w.lon})</span>`;
-      else nameEl.innerHTML = '<span style="color:rgba(226,232,240,.4)">🌐 Tự động (theo IP nhà mạng)</span>';
+  _renderStereo() {
+    this._updateSwitch("#swStereo", this._state.stereoEnabled);
+    this._updateSwitch("#swStereoReceiver", this._state.stereoReceiverEnabled);
+    const mo = this.querySelector("#stereoMasterOpts");
+    if (mo) mo.style.display = this._state.stereoEnabled ? "block" : "none";
+    if (this._state.stereoEnabled) {
+      const ip = this.querySelector("#stereoSlaveIp"); if (ip && document.activeElement !== ip) ip.value = this._state.stereoSlaveIp;
+      this.querySelectorAll("#btnStLeft, #btnStRight, #btnStStereo").forEach(b => b.classList.remove("active"));
+      const activeBtn = this.querySelector(`[data-stch="${this._state.stereoChannel}"]`);
+      if (activeBtn) activeBtn.classList.add("active");
+      const sl = this.querySelector("#stDelaySlider"), vl = this.querySelector("#stDelayVal");
+      if (sl && vl && document.activeElement !== sl) { sl.value = this._state.stereoSyncDelayMs; vl.textContent = this._state.stereoSyncDelayMs; }
     }
-    const sel = this.querySelector("#weatherProvinceSel");
-    if (sel && w.name) {
-      for (let i = 0; i < sel.options.length; i++) {
-        if (sel.options[i].value) {
-          try { const d = JSON.parse(sel.options[i].value); if (d.name === w.name) { sel.selectedIndex = i; return; } } catch {}
-        }
-      }
-    } else if (sel) { sel.selectedIndex = 0; }
   }
 
   _renderEqBands() {
@@ -3232,59 +3448,40 @@ select.form-inp{cursor:pointer}
   }
 }
 
-if (!customElements.get("aibox-ha-card")) {
-  customElements.define("aibox-ha-card", AiBoxCard);
-}
-window.customCards = window.customCards || [];
-if (!window.customCards.find(c => c.type === "aibox-ha-card")) {
-  window.customCards.push({ type: "aibox-ha-card", name: "AI BOX HA Card", description: "AI BOX full-feature card via custom HTTPS endpoint or LAN/tunnel", preview: false });
-}
-
-(function() {
-  const BUILD_TS = "20260420-ha-custom-v2";
-  try { sessionStorage.setItem("aibox_ha_card_build", BUILD_TS); } catch(_) {}
-  console.log(`%c AI BOX HA Card [${BUILD_TS}] — custom_ws_url/custom_speaker_ws_url`, "color:#a78bfa;font-weight:bold;font-size:11px");
-})();
-const PhicommBaseCard = customElements.get("phicomm-r1-card");
-
-if (!PhicommBaseCard) {
-  console.error("[AI BOX HA Card] Missing dependency: phicomm-r1-card must be loaded first.");
-} else {
-  class AiBoxHaCard extends PhicommBaseCard {
-    static getStubConfig() {
-      const base = typeof PhicommBaseCard.getStubConfig === "function"
-        ? PhicommBaseCard.getStubConfig()
-        : { entity: "media_player.phicomm_r1" };
-      return { ...base, title: "AI BOX" };
-    }
-
-    setConfig(config) {
-      const normalized = {
-        title: "AI BOX",
-        ...(config || {}),
-      };
-
-      // Alias nhẹ để người dùng cũ dễ migrate.
-      if (!normalized.entity && normalized.device) {
-        normalized.entity = normalized.device;
-      }
-
-      super.setConfig(normalized);
-    }
-  }
-
+// Fallback: if PhicommBaseCard exists (from another card), extend it for compatibility
+if (typeof PhicommBaseCard !== 'undefined') {
+  const AiBoxHaCard = class extends PhicommBaseCard {};
   if (!customElements.get("aibox-ha-card")) {
     customElements.define("aibox-ha-card", AiBoxHaCard);
   }
-
-  window.customCards = window.customCards || [];
-  if (!window.customCards.find((card) => card.type === "aibox-ha-card")) {
-    window.customCards.push({
-      type: "aibox-ha-card",
-      name: "AI BOX HA Card",
-      description: "AI BOX card chạy qua integration phicomm_r1 (HA proxy, không cần tunnel/domain).",
-      preview: false,
-    });
-  }
+} else if (!customElements.get("aibox-ha-card")) {
+  customElements.define("aibox-ha-card", AiBoxCard);
+}
+// Backwards compatibility alias
+if (!customElements.get("aibox-webui-card")) {
+  customElements.define("aibox-webui-card", AiBoxCard);
 }
 
+window.customCards = window.customCards || [];
+// Remove any stale entries
+window.customCards = window.customCards.filter(
+  c => c.type !== "aibox-ha-card" && c.type !== "aibox-webui-card"
+);
+window.customCards.push({
+  type: "aibox-ha-card",
+  name: "AI BOX HA Card",
+  description: "Full-featured AI BOX Home Assistant card",
+  preview: false,
+});
+window.customCards.push({
+  type: "aibox-webui-card",
+  name: "AI BOX HA Card (legacy)",
+  description: "Alias for aibox-ha-card",
+  preview: false,
+});
+
+console.log(
+  "%c AI BOX HA Card " + CARD_VERSION + " — Full standalone card with multi-room support",
+  "color:#6366f1;font-weight:bold;font-size:11px"
+);
+})(); // end IIFE
