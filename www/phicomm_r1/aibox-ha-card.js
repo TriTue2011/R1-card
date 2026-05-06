@@ -2260,7 +2260,7 @@ select.form-inp{cursor:pointer}
   <div class="form-row"><div class="form-label">Agent ID</div><input class="form-inp" id="hassAgent" placeholder="conversation.xxx" /></div>
   <div class="form-row"><div class="form-label">API Key</div><input class="form-inp" id="hassKey" placeholder="eyJ..." type="password" /></div>
   <div class="form-row"><div class="form-label">Assist</div><select class="form-inp" id="hassPipeline">${hpOpts}</select></div>
-  <div class="fx g4"><button class="form-btn sm" id="btnHassTest">🔌 Test</button><button class="form-btn sm" id="btnHassScan">🔍 Quét Assist</button><button class="form-btn sm" id="btnHassSave">💾 Lưu HASS</button></div></div>
+  <div class="fx g4"><button class="form-btn sm" id="btnHassTest">🔌 Test</button><button class="form-btn sm" id="btnHassScan">🔍 Quét Assist</button><button class="form-btn sm" id="btnHassSave">💾 Lưu HASS</button><span class="form-btn sm" id="hassStatusBadge" style="pointer-events:none;opacity:.75">${this._state.hassConfigured ? '✅ Đã cấu hình' : (this._state.hassConfigured === false ? '❌ Chưa cấu hình' : '⬤ --')}</span></div></div>
   <div class="ctrl-section mt8"><div class="section-label">WiFi</div>
   <div id="wifiStatusArea"></div>
   <div class="fx g4 mt6"><button class="form-btn sm" id="btnWifiScan">📡 Quét WiFi</button><button class="form-btn sm" id="btnWifiSavedRef">🔄 Đã lưu</button></div>
@@ -2536,17 +2536,38 @@ select.form-inp{cursor:pointer}
       this._on("#btnHassSave", () => {
         let key = this.querySelector("#hassKey")?.value?.trim();
         if (key === "***" || (this._state.hassApiKeyMasked && !key)) key = undefined;
-        this._send({ action: "hass_set", url: this.querySelector("#hassUrl")?.value?.trim() || "", agent_id: this.querySelector("#hassAgent")?.value?.trim() || "", api_key: key });
+        const pipelineEl = this.querySelector("#hassPipeline");
+        const pipeline_id = pipelineEl ? pipelineEl.value : this._state.hassPipeline;
+        const payload = { action: "hass_set", url: this.querySelector("#hassUrl")?.value?.trim() || "", agent_id: this.querySelector("#hassAgent")?.value?.trim() || "" };
+        if (key !== undefined) payload.api_key = key;
+        if (pipeline_id !== undefined) payload.pipeline_id = pipeline_id;
+        this._send(payload);
+        this._toast("💾 Đang lưu cấu hình HA...", "");
       });
       this._on("#btnHassTest", () => {
+        const url = (this.querySelector("#hassUrl")?.value?.trim() || this._state.hassUrl || "").replace(/\/$/, "");
+        const key = this.querySelector("#hassKey")?.value?.trim() || "";
+        if (!url) { this._toast("❌ Vui lòng nhập HA URL trước", "error"); return; }
+        if (!key && !this._state.hassApiKeyMasked) { this._toast("❌ Vui lòng nhập API Key trước", "error"); return; }
         this._toast("🔄 Đang kiểm tra kết nối...", "");
-        this._send({ action: "hass_test" });
+        // Test via HA REST API directly (firmware hass_test not supported on all versions)
+        const apiKey = (key && key !== "***") ? key : null;
+        if (apiKey) {
+          fetch(`${url}/api/`, { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" } })
+            .then(r => { if (r.ok) { this._toast("✅ Kết nối HA thành công", "success"); this._fetchHassPipelines(); } else { this._toast(`❌ HA phản hồi lỗi: ${r.status}`, "error"); } })
+            .catch(e => { this._toast("❌ Không kết nối được HA: " + (e.message || e), "error"); });
+        } else {
+          // Key is masked (already saved) – test via firmware
+          this._send({ action: "hass_test" });
+        }
       });
       this._on("#btnHassScan", () => {
         this._toast("🔍 Đang tải danh sách Assist...", "");
         this._fetchHassPipelines();
       });
-      const hp = this.querySelector("#hassPipeline"); if (hp) hp.onchange = () => this._send({ action: "hass_set", pipeline_id: hp.value });
+      // Dropdown: only update local state, do NOT auto-send to avoid re-render resetting selection
+      const hp = this.querySelector("#hassPipeline");
+      if (hp) hp.onchange = () => { this._state.hassPipeline = hp.value; };
       this._on("#btnWeatherRefresh", () => this._send({ action: "weather_province_get" }));
       this._on("#btnWeatherSave", () => {
         const sel = this.querySelector("#weatherProvinceSel");
@@ -2754,7 +2775,14 @@ select.form-inp{cursor:pointer}
       if (d.type === "tiktok_reply_state" || d.type === "tiktok_reply_result") { this._state.tiktokReply = !!d.enabled; this._renderTikTok(); return; }
       if (d.type === "led_state" || d.type === "led_get_state_result" || d.type === "led_toggle_result") { if (d.enabled !== undefined) this._state.ledEnabled = !!d.enabled; this._renderControlToggles(); return; }
       if (d.type === "ota_config" || d.type === "ota_get_result" || d.type === "ota_set_result") { if (d.ota_url !== undefined) this._state.otaUrl = d.ota_url; if (Array.isArray(d.options)) this._state.otaOptions = d.options; this._renderOta(); return; }
-      if (d.type === "hass_config" || d.type === "hass_get_result" || d.type === "hass_set_result") { this._state.hassUrl = d.url || ""; this._state.hassAgentId = d.agent_id || ""; this._state.hassConfigured = !!d.configured; if (d.api_key === "***") this._state.hassApiKeyMasked = true; this._renderHass(); return; }
+      if (d.type === "hass_config" || d.type === "hass_get_result" || d.type === "hass_set_result") {
+        this._state.hassUrl = d.url || ""; this._state.hassAgentId = d.agent_id || "";
+        this._state.hassConfigured = !!d.configured;
+        if (d.api_key === "***") this._state.hassApiKeyMasked = true;
+        if (d.pipeline_id !== undefined) this._state.hassPipeline = d.pipeline_id;
+        if (d.type === "hass_set_result") this._toast(d.success !== false ? "✅ Đã lưu cấu hình HA" : "❌ Lưu HA thất bại", d.success !== false ? "success" : "error");
+        this._renderHass(); return;
+      }
       if (d.type === "hass_pipelines" || d.type === "hass_pipelines_result" || d.type === "hass_get_pipelines_result" || d.type === "hass_pipelines_get_result") { this._state.hassPipelines = d.pipelines || []; if (d.pipeline_id !== undefined) this._state.hassPipeline = d.pipeline_id; this._renderHass(); return; }
       if (d.type === "hass_test_result") {
         this._toast(d.success ? "✅ Kết nối HA thành công" : "❌ Kết nối HA thất bại: " + (d.error || ""), d.success ? "success" : "error");
@@ -3187,11 +3215,19 @@ select.form-inp{cursor:pointer}
       const hp = this.querySelector("#hassPipeline");
       if (hp) {
         const cur = this._state.hassPipeline;
+        // Only update options if list changed — preserve current selection
         hp.innerHTML = '<option value="">-- Mặc định --</option>' + this._state.hassPipelines.map(p => {
           const id = p.id || p, name = p.name || p.id || p;
           return `<option value="${this._esc(id)}" ${id === cur ? 'selected' : ''}>${this._esc(name)}</option>`;
         }).join('');
+        // Restore selection explicitly after innerHTML rewrite
+        if (cur) hp.value = cur;
+        // Re-bind onchange in case element was re-created
+        hp.onchange = () => { this._state.hassPipeline = hp.value; };
       }
+      // Update status badge
+      const badge = this.querySelector("#hassStatusBadge");
+      if (badge) badge.textContent = this._state.hassConfigured === true ? '✅ Đã cấu hình' : (this._state.hassConfigured === false ? '❌ Chưa cấu hình' : '⬤ --');
     }
 
     _fetchHassPipelines() {
